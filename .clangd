@@ -1,0 +1,17 @@
+# Make clangd (the IDE analyzer) tolerate the ESP32's Xtensa-GCC build flags.
+# The real firmware is compiled by xtensa GCC and builds clean; clangd just
+# indexes for autocomplete/navigation. Strip the GCC-only flags it chokes on
+# and retarget to a generic ELF so section attributes parse.
+CompileFlags:
+  Remove:
+    - -mlongcalls
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -mtext-section-literals
+    - -mdisable-hardware-atomics
+    - -free
+    - -fipa-pta
+  Add:
+    - --target=riscv32-unknown-elf
+    - -Wno-unknown-attributes
+    - -Wno-attributes
