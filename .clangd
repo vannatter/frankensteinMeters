@@ -15,3 +15,5 @@ CompileFlags:
     - --target=riscv32-unknown-elf
     - -Wno-unknown-attributes
     - -Wno-attributes
+    # GCC's implicit libc headers, which clangd doesn't inherit (machine-local path):
+    - -isystem/Users/dustinvannatter/.platformio/packages/toolchain-xtensa-esp32/xtensa-esp32-elf/include
