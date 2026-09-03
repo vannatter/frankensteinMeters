@@ -817,11 +817,9 @@ border-bottom:1px solid var(--edge2)}
 .gw{width:54px;height:30px;position:relative;overflow:hidden;margin:0 auto;
 border:1px solid var(--edge2);border-radius:54px 54px 0 0;background:#0d0a07}
 .gn{position:absolute;left:50%;bottom:-1px;width:2px;height:25px;margin-left:-1px;
-background:#e6d8b8;transform-origin:bottom center;transform:rotate(-80deg);
-transition:transform .28s linear}
+background:#e6d8b8;transform-origin:bottom center;transform:rotate(-80deg)}
 .lw{width:22px;height:22px;border-radius:50%;margin:4px auto;
-background:#241c12;border:1px solid var(--edge2);
-transition:background .15s,box-shadow .15s}
+background:#241c12;border:1px solid var(--edge2)}
 .wname{font-size:.58rem;letter-spacing:.12em;color:var(--dim);margin-top:.2rem;
 text-transform:uppercase}
 #pgauge{height:12px;border:1px solid var(--edge);border-radius:2px;background:#0d0a07;
@@ -939,27 +937,43 @@ async function herdCheck(){
     :'<div class="gw"><div class="gn" id="lv'+p.o+'_'+i+'"></div></div>')+
    '<div class="wname">'+m.name+'</div></div>').join('')+'</div>';
   return h;}).join('');}
-// Fast poll of every reachable board's real output levels — the widgets
-// mirror what the physical needles and bulbs are doing right now.
+// Fast poll of every reachable board's real output levels; a 60fps
+// animation loop eases the widgets toward the latest readings so they move
+// like the physical needles instead of stepping between samples.
+let liveT={},liveBusy=false;
 async function pollLive(){
- for(const[n,o] of HERD){
-  if(!herdMeta[o])continue;
+ if(liveBusy)return;
+ liveBusy=true;
+ await Promise.all(HERD.map(async([n,o])=>{
+  if(!herdMeta[o])return;
   try{
-   const c=new AbortController();const t=setTimeout(()=>c.abort(),700);
+   const c=new AbortController();const t=setTimeout(()=>c.abort(),600);
    const d=await (await fetch(PREFIX+o+'/live',{signal:c.signal})).json();
    clearTimeout(t);
    d.v.forEach((v,i)=>{
-    const el=document.getElementById('lv'+o+'_'+i);
-    if(!el||!herdMeta[o][i])return;
-    if(herdMeta[o][i].type==='light'){
-     el.style.background='rgba(255,213,87,'+(v/100)+')';
-     el.style.boxShadow=v>15?'0 0 '+(4+v/8)+'px rgba(255,213,87,.8)':'none';
-    }else{
-     el.style.transform='rotate('+(-80+v*1.6)+'deg)';
-    }});
+    const k=o+'_'+i;
+    if(!liveT[k])liveT[k]={c:v,t:v};else liveT[k].t=v;});
   }catch(e){}
- }}
-setInterval(pollLive,300);
+ }));
+ liveBusy=false;}
+setInterval(pollLive,150);
+function animLab(){
+ for(const k in liveT){
+  const el=document.getElementById('lv'+k);
+  if(!el)continue;
+  const[o,i]=k.split('_');
+  const m=herdMeta[o]&&herdMeta[o][+i];
+  if(!m)continue;
+  const s=liveT[k];
+  s.c+=(s.t-s.c)*(m.type==='light'?0.5:0.22);
+  if(m.type==='light'){
+   el.style.background='rgba(255,213,87,'+(s.c/100)+')';
+   el.style.boxShadow=s.c>15?'0 0 '+(4+s.c/8)+'px rgba(255,213,87,.8)':'none';
+  }else{
+   el.style.transform='rotate('+(-80+s.c*1.6)+'deg)';
+  }}
+ requestAnimationFrame(animLab);}
+requestAnimationFrame(animLab);
 const LPATS=['dark','steady','doubleblink','breathe','candle','strobe','random','custom'];
 const COLORS={flicker:'var(--green)',freakout:'var(--red)',coma:'var(--blue)',sweep:'var(--amber)',off:'#3a3a3a'};
 let curMode='',curBase='',shownKey='x';
