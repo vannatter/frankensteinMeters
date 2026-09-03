@@ -40,10 +40,12 @@
 // STYLE_FLICKER: wandering + surges (the normal lab-instrument look).
 // STYLE_HEARTBEAT: lub-dub pulse — ~65 BPM normally, pounding during
 // freakout, slow and faint in coma. Tuning in the HEART_* defines below.
+// STYLE_SCAN: patrol sweep at rest — slow bottom-to-top-and-back with a
+// slight tremble — but still slams in freakout and sinks in coma.
 // STYLE_LIGHT: a light, not a meter — shows its selected pattern (changeable
 // from the dashboard), except panic/freakout ALWAYS strobes every light and
 // coma darkens them.
-enum MeterStyle { STYLE_FLICKER, STYLE_HEARTBEAT, STYLE_LIGHT };
+enum MeterStyle { STYLE_FLICKER, STYLE_HEARTBEAT, STYLE_SCAN, STYLE_LIGHT };
 
 // Patterns a STYLE_LIGHT channel can show (dashboard-selectable):
 //   dark        off until a panic
@@ -76,8 +78,8 @@ struct MeterProfile {
 static const MeterProfile METERS[METER_COUNT] = {
     // GPIO 25, big EICO: the star — calm slow wander, rare big surges.
     {"main", 25, PWM_MAX_DUTY, 0.15f, 0.35f, 0.70f, 1.00f, 6.0f, 18.0f, 0.02f, 0.06f, STYLE_FLICKER, LP_DARK},
-    // GPIO 26: busier — higher band, twitchier.
-    {"antenna", 26, PWM_MAX_DUTY, 0.20f, 0.55f, 0.75f, 1.00f, 1.5f, 6.0f, 0.05f, 0.12f, STYLE_FLICKER, LP_DARK},
+    // GPIO 26: scanning the ether — patrol sweep at rest.
+    {"antenna", 26, PWM_MAX_DUTY, 0.20f, 0.55f, 0.75f, 1.00f, 1.5f, 6.0f, 0.02f, 0.12f, STYLE_SCAN, LP_DARK},
     // GPIO 27, Weston 3V range: calmer, sits lower, rarer surges.
     {"weston", 27, PWM_MAX_DUTY, 0.10f, 0.35f, 0.60f, 0.95f, 5.0f, 15.0f, 0.02f, 0.10f, STYLE_FLICKER, LP_DARK},
     // GPIO 33: the heartbeat monitor.
@@ -119,7 +121,7 @@ static const MeterProfile METERS[4] = {
 
 // Heartbeat tuning: {beat period ms, main-pulse height, rest baseline} per
 // mode. The second (dub) pulse is 60% of the main one.
-#define HEART_NORMAL_MS 1400.0f
+#define HEART_NORMAL_MS 1700.0f
 #define HEART_NORMAL_AMP 0.65f
 #define HEART_NORMAL_BASE 0.06f
 #define HEART_FREAK_MS 550.0f

@@ -235,6 +235,12 @@ public:
             }
             target = wanderTarget_ + surge_ + frand(-COMA_JITTER, COMA_JITTER);
             position_ += (target - position_) * COMA_SPEED;
+        } else if (p_->style == STYLE_SCAN) {
+            // Patrol sweep at rest: slow full-range triangle with a tremble.
+            float ph = (now % 7000) / 7000.0f;
+            float trit = ph < 0.5f ? ph * 2.0f : 2.0f - ph * 2.0f;
+            target = trit + frand(-p_->jitter, p_->jitter);
+            position_ += (target - position_) * 0.08f;
         } else {
             // Slow idle wander: pick a new spot in the idle band now and then.
             if ((int32_t)(now - nextWanderAt_) >= 0) {
@@ -289,9 +295,9 @@ private:
         // needle rides the curve instead of getting yanked and ringing.
         float ph = (now - beatStart_) / period;
         float target = base;
-        if (ph < 0.24f)      target = base + (amp * 0.68f - base) * sinf(PI * (ph / 0.24f));
-        else if (ph < 0.32f) target = base;
-        else if (ph < 0.60f) target = base + (amp - base) * sinf(PI * ((ph - 0.32f) / 0.28f));
+        if (ph < 0.20f)      target = base + (amp * 0.68f - base) * sinf(PI * (ph / 0.20f));
+        else if (ph < 0.26f) target = base;
+        else if (ph < 0.49f) target = base + (amp - base) * sinf(PI * ((ph - 0.26f) / 0.23f));
         position_ += (target - position_) * 0.22f;
         writeDuty(position_);
     }
@@ -542,6 +548,7 @@ static void handleStatus() {
         body += isLight ? "light" : "meter";
         body += "\",\"style\":\"";
         body += METERS[i].style == STYLE_HEARTBEAT ? "heartbeat"
+                : METERS[i].style == STYLE_SCAN ? "scan"
                 : (isLight ? "light" : "flicker");
         body += "\",\"mode\":\"";
         body += isLight ? LP_NAMES[lightPatterns[i]] : OVR_NAMES[overrides[i]];
@@ -949,13 +956,13 @@ const R=(a,b)=>a+Math.random()*(b-a);
 const tri=(t,p)=>{const x=(t%p)/p;return x<0.5?x*2:2-x*2;};
 let simS={};
 function heartSim(t,bm){
- let per=1400,amp=.65,base=.06;
+ let per=1700,amp=.65,base=.06;
  if(bm==='freakout'){per=550;amp=1;base=.1}
  else if(bm==='coma'){per=2800;amp=.3;base=.03}
  const ph=(t%per)/per;
- if(ph<0.24)return (base+(amp*0.68-base)*Math.sin(Math.PI*ph/0.24))*100;
- if(ph<0.32)return base*100;
- if(ph<0.60)return (base+(amp-base)*Math.sin(Math.PI*(ph-0.32)/0.28))*100;
+ if(ph<0.20)return (base+(amp*0.68-base)*Math.sin(Math.PI*ph/0.20))*100;
+ if(ph<0.26)return base*100;
+ if(ph<0.49)return (base+(amp-base)*Math.sin(Math.PI*(ph-0.26)/0.23))*100;
  return base*100;}
 function seqAt(steps,t,gauge){
  const st=(steps||'').split(',').map(s=>gauge?s.split(':').map(Number):Number(s))
@@ -973,6 +980,7 @@ function gTarget(s,m,bm,t){
  if(bm==='off'||md==='off')return 0;
  if(bm==='sweep')return tri(t,8000)*100;
  if(m.style==='heartbeat'&&m.mode==='follow')return heartSim(t,bm);
+ if(m.style==='scan'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma')return tri(t,7000)*100;
  switch(md){
   case 'freakout':
    if(s.seizeTo>t)return R(90,100);
