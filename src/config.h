@@ -78,8 +78,8 @@ struct MeterProfile {
 static const MeterProfile METERS[METER_COUNT] = {
     // GPIO 25, big EICO: the star — calm slow wander, rare big surges.
     {"main", 25, PWM_MAX_DUTY, 0.15f, 0.35f, 0.70f, 1.00f, 6.0f, 18.0f, 0.02f, 0.06f, STYLE_FLICKER, LP_DARK},
-    // GPIO 26: scanning the ether — patrol sweep at rest.
-    {"antenna", 26, PWM_MAX_DUTY, 0.20f, 0.55f, 0.75f, 1.00f, 1.5f, 6.0f, 0.02f, 0.12f, STYLE_SCAN, LP_DARK},
+    // GPIO 26: busier — higher band, twitchier.
+    {"antenna", 26, PWM_MAX_DUTY, 0.20f, 0.55f, 0.75f, 1.00f, 1.5f, 6.0f, 0.05f, 0.12f, STYLE_FLICKER, LP_DARK},
     // GPIO 27, Weston 3V range: calmer, sits lower, rarer surges.
     {"weston", 27, PWM_MAX_DUTY, 0.10f, 0.35f, 0.60f, 0.95f, 5.0f, 15.0f, 0.02f, 0.10f, STYLE_FLICKER, LP_DARK},
     // GPIO 33: the heartbeat monitor.
@@ -89,7 +89,8 @@ static const MeterProfile METERS[METER_COUNT] = {
     // a strapping pin — safe with a meter-to-GND load, never tie it high.)
     {"slot5", 12, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.03f, 0.08f, STYLE_FLICKER, LP_DARK},
     {"slot6", 13, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.03f, 0.08f, STYLE_FLICKER, LP_DARK},
-    {"slot7", 14, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.03f, 0.08f, STYLE_FLICKER, LP_DARK},
+    // Slot 7 (pin 14): the ether-scanner — patrol sweep at rest.
+    {"slot7", 14, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.02f, 0.08f, STYLE_SCAN, LP_DARK},
 };
 #else
 // Board 2 is all lighting — no meters.
