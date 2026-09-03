@@ -258,7 +258,12 @@ public:
         writeDuty(position_);
     }
 
+    // Last commanded output level, 0..1 — what the physical needle/light is
+    // being told to do right now. Feeds the dashboard's live visualization.
+    float level() const { return lastDuty_; }
+
     void writeDuty(float frac) {
+        lastDuty_ = constrain(frac, 0.0f, 1.0f);
         int duty = (int)(constrain(frac, 0.0f, 1.0f) * p_->fullScaleDuty);
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
         ledcWrite(p_->pin, duty);
@@ -306,6 +311,7 @@ private:
     float surge_ = 0.0f;
     float surgeDecay_ = 0.98f;
     float speed_ = 0.08f;
+    float lastDuty_ = 0.0f;
     bool freakHigh_ = false;
     bool seizing_ = false;
     int slamsLeft_ = SLAMS_PER_BURST_MIN;
@@ -654,6 +660,35 @@ static void handleRename() {
     server.send(200, "application/json", "{\"ok\":true}\n");
 }
 
+// /herd — the configured board roster (single source of truth: config.h's
+// ALL_BOARD_OCTETS). The dashboard builds its herd card, live poller, and
+// target dropdown from this instead of hardcoding addresses.
+static void handleHerd() {
+    String body = "{\"prefix\":\"" BOARD_IP_PREFIX "\",\"boards\":[";
+    for (unsigned i = 0; i < sizeof(ALL_BOARD_OCTETS) / sizeof(int); i++) {
+        if (i) body += ",";
+        body += "{\"n\":";
+        body += ALL_BOARD_OCTETS[i] - 200;
+        body += ",\"o\":";
+        body += ALL_BOARD_OCTETS[i];
+        body += "}";
+    }
+    body += "]}\n";
+    server.send(200, "application/json", body);
+}
+
+// /live — current output level of every channel, 0-100. Polled fast by the
+// dashboard's lab visualization.
+static void handleLive() {
+    String body = "{\"v\":[";
+    for (int i = 0; i < METER_COUNT; i++) {
+        if (i) body += ",";
+        body += (int)(meters[i].level() * 100.0f + 0.5f);
+    }
+    body += "]}\n";
+    server.send(200, "application/json", body);
+}
+
 static void handleLog() {
     String body;
     for (int i = 0; i < 24; i++) {
@@ -776,6 +811,19 @@ border-bottom:1px solid var(--edge2)}
 .hrow:last-child{border-bottom:0}
 .hrow .on2{color:#8fd18f;font-size:.85rem}
 .hrow .off2{color:#6b6b6b;font-size:.85rem}
+.wstrip{display:flex;gap:.7rem;flex-wrap:wrap;padding:.45rem 0 .55rem;
+border-bottom:1px solid var(--edge2)}
+.witem{text-align:center}
+.gw{width:54px;height:30px;position:relative;overflow:hidden;margin:0 auto;
+border:1px solid var(--edge2);border-radius:54px 54px 0 0;background:#0d0a07}
+.gn{position:absolute;left:50%;bottom:-1px;width:2px;height:25px;margin-left:-1px;
+background:#e6d8b8;transform-origin:bottom center;transform:rotate(-80deg);
+transition:transform .28s linear}
+.lw{width:22px;height:22px;border-radius:50%;margin:4px auto;
+background:#241c12;border:1px solid var(--edge2);
+transition:background .15s,box-shadow .15s}
+.wname{font-size:.58rem;letter-spacing:.12em;color:var(--dim);margin-top:.2rem;
+text-transform:uppercase}
 #pgauge{height:12px;border:1px solid var(--edge);border-radius:2px;background:#0d0a07;
 margin:.6rem 0 .2rem;overflow:hidden}
 #pfill{height:100%;width:0%;background:#8fa8c9;transition:width .25s}
@@ -820,8 +868,6 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <label>The Experiment</label>
 <select id="tgt" onchange="refresh()">
 <option value="all" selected>The whole laboratory</option>
-<option value="1">Board the First &mdash; meters (.201)</option>
-<option value="2">Board the Second (.202)</option>
 </select>
 <div class="grid">
 <button class="b-freak" data-m="freakout" onclick="hit('/freakout')">&#9889; Galvanize<small>freak out</small></button>
@@ -854,20 +900,66 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 </div></div></div>
 <script>
 const OVRS=['follow','flicker','freakout','coma','off','custom','fuzzy','heartbeat','pegged','scan','sputter'];
-const HERD=[[1,201],[2,202]];
+let HERD=[],PREFIX='http://192.168.71.';
+let herdMeta={},herdSig='';
+async function loadHerd(){
+ try{
+  const h=await (await fetch('/herd')).json();
+  PREFIX=h.prefix;
+  HERD=h.boards.map(b=>[b.n,b.o]);
+  const t=document.getElementById('tgt');
+  HERD.forEach(([n,o])=>{
+   const op=document.createElement('option');
+   op.value=n;op.textContent='Board '+n+' (.'+o+')';
+   t.appendChild(op);});
+ }catch(e){}
+ refresh();}
 async function herdCheck(){
- const rows=await Promise.all(HERD.map(async([n,o])=>{
+ const parts=await Promise.all(HERD.map(async([n,o])=>{
   try{
    const c=new AbortController();const t=setTimeout(()=>c.abort(),1500);
-   const s=await (await fetch('http://192.168.71.'+o+'/status',{signal:c.signal})).json();
+   const s=await (await fetch(PREFIX+o+'/status',{signal:c.signal})).json();
    clearTimeout(t);
-   return '<div class="hrow"><span class="mname">BOARD '+n+'<span class="mpin">.'+o+'</span></span>'+
-    '<span class="on2">&#9679; '+s.mode+'</span></div>';
-  }catch(e){
-   return '<div class="hrow"><span class="mname">BOARD '+n+'<span class="mpin">.'+o+'</span></span>'+
-    '<span class="off2">&#9675; unreachable</span></div>';
-  }}));
- document.getElementById('herd').innerHTML=rows.join('');}
+   herdMeta[o]=s.meters;
+   return {n:n,o:o,ok:1,mode:s.mode,ms:s.meters};
+  }catch(e){delete herdMeta[o];return {n:n,o:o,ok:0};}
+ }));
+ const sig=JSON.stringify(parts.map(p=>[p.n,p.ok,p.mode,(p.ms||[]).map(m=>m.name+m.type)]));
+ if(sig===herdSig)return;
+ herdSig=sig;
+ document.getElementById('herd').innerHTML=parts.map(p=>{
+  let h='<div class="hrow" style="border-bottom:0"><span class="mname">BOARD '+p.n+
+   '<span class="mpin">.'+p.o+'</span></span>'+
+   (p.ok?'<span class="on2">&#9679; '+p.mode+'</span>'
+        :'<span class="off2">&#9675; unreachable</span>');
+  h+='</div>';
+  if(p.ok)h+='<div class="wstrip">'+p.ms.map((m,i)=>
+   '<div class="witem">'+(m.type==='light'
+    ?'<div class="lw" id="lv'+p.o+'_'+i+'"></div>'
+    :'<div class="gw"><div class="gn" id="lv'+p.o+'_'+i+'"></div></div>')+
+   '<div class="wname">'+m.name+'</div></div>').join('')+'</div>';
+  return h;}).join('');}
+// Fast poll of every reachable board's real output levels — the widgets
+// mirror what the physical needles and bulbs are doing right now.
+async function pollLive(){
+ for(const[n,o] of HERD){
+  if(!herdMeta[o])continue;
+  try{
+   const c=new AbortController();const t=setTimeout(()=>c.abort(),700);
+   const d=await (await fetch(PREFIX+o+'/live',{signal:c.signal})).json();
+   clearTimeout(t);
+   d.v.forEach((v,i)=>{
+    const el=document.getElementById('lv'+o+'_'+i);
+    if(!el||!herdMeta[o][i])return;
+    if(herdMeta[o][i].type==='light'){
+     el.style.background='rgba(255,213,87,'+(v/100)+')';
+     el.style.boxShadow=v>15?'0 0 '+(4+v/8)+'px rgba(255,213,87,.8)':'none';
+    }else{
+     el.style.transform='rotate('+(-80+v*1.6)+'deg)';
+    }});
+  }catch(e){}
+ }}
+setInterval(pollLive,300);
 const LPATS=['dark','steady','doubleblink','breathe','candle','strobe','random','custom'];
 const COLORS={flicker:'var(--green)',freakout:'var(--red)',coma:'var(--blue)',sweep:'var(--amber)',off:'#3a3a3a'};
 let curMode='',curBase='',shownKey='x';
@@ -1014,7 +1106,8 @@ async function refresh(){try{
  // The Instruments card follows the target dropdown: picking another board
  // shows THAT board's channels and sends changes to it.
  const t=document.getElementById('tgt').value;
- curBase=(t==='all'||+t===s.board)?'':'http://192.168.71.20'+t;
+ const tb=HERD.find(x=>x[0]==t);
+ curBase=(t==='all'||+t===s.board||!tb)?'':PREFIX+tb[1];
  let ms=s.meters,mb=s.board;
  if(curBase){try{const ts=await (await fetch(curBase+'/status')).json();
   ms=ts.meters;mb=ts.board}catch(e){ms=[];mb=t+' (unreachable)'}}
@@ -1027,7 +1120,7 @@ async function refresh(){try{
  }catch(e){log.textContent='(board unreachable)'}
  log.scrollTop=log.scrollHeight;
 }catch(e){const p=document.getElementById('pill');p.textContent='OFFLINE';p.style.background='#555'}}
-refresh();setInterval(refresh,2000);
+loadHerd();setInterval(refresh,2000);
 </script></body></html>)html";
 
 static void handlePanel() {
@@ -1101,6 +1194,8 @@ void setup() {
     server.on("/pattern", handlePattern);
     server.on("/mpattern", handleMPattern);
     server.on("/rename", handleRename);
+    server.on("/live", handleLive);
+    server.on("/herd", handleHerd);
     server.on("/status", handleStatus);
     server.on("/log", handleLog);
     server.on("/freakout", handleFreakout);
