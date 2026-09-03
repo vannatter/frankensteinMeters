@@ -60,6 +60,47 @@ public:
         writeDuty(position_);
     }
 
+    // Custom choreography: move to each position, hold for its duration, loop.
+    void tickSeq(const uint8_t* pos, const uint16_t* dur, uint8_t n) {
+        if (n == 0) { tickOff(); return; }
+        uint32_t now = millis();
+        if (stepIdx_ >= n) stepIdx_ = 0;
+        if ((int32_t)(now - strobeFlipAt_) >= 0) {
+            stepIdx_ = (uint8_t)((stepIdx_ + 1) % n);
+            strobeFlipAt_ = now + dur[stepIdx_];
+        }
+        float target = pos[stepIdx_] / 100.0f;
+        position_ += (target - position_) * min(speed_ * 3.0f, 0.5f);
+        writeDuty(position_);
+    }
+
+    // Pegged: pinned near the top, trembling like it's overloaded.
+    void tickPegged() {
+        float target = 0.95f + frand(-0.02f, 0.02f);
+        position_ += (target - position_) * speed_ * 2.0f;
+        writeDuty(position_);
+    }
+
+    // Scan: slow patrol sweep, bottom to top and back, ~7s per cycle.
+    void tickScan() {
+        float ph = (millis() % 7000) / 7000.0f;
+        float target = ph < 0.5f ? ph * 2.0f : 2.0f - ph * 2.0f;
+        position_ += (target - position_) * 0.08f;
+        writeDuty(position_);
+    }
+
+    // Sputter: dying instrument — slumped near zero with weak twitches.
+    void tickSputter() {
+        uint32_t now = millis();
+        if ((int32_t)(now - nextWanderAt_) >= 0) {
+            wanderTarget_ = frand(0.0f, 1.0f) < 0.3f ? frand(0.10f, 0.28f)
+                                                     : frand(0.02f, 0.06f);
+            nextWanderAt_ = now + (uint32_t)frand(300.0f, 1800.0f);
+        }
+        position_ += (wanderTarget_ - position_) * 0.12f;
+        writeDuty(position_);
+    }
+
     // Light channel: show the selected pattern — except panic always strobes
     // and coma always darkens, regardless of the pattern.
     void tickLight(LightPattern pat, bool freakout, bool coma,
@@ -294,8 +335,10 @@ static bool comaMode = false;
 
 // Per-meter override: FOLLOW obeys the board mode; the rest pin that one
 // meter to a specific behavior regardless of what the lab is doing.
-enum MeterOverride { OVR_FOLLOW, OVR_FLICKER, OVR_FREAKOUT, OVR_COMA, OVR_OFF };
-static const char* OVR_NAMES[] = {"follow", "flicker", "freakout", "coma", "off"};
+enum MeterOverride { OVR_FOLLOW, OVR_FLICKER, OVR_FREAKOUT, OVR_COMA, OVR_OFF,
+                     OVR_CUSTOM, OVR_PEGGED, OVR_SCAN, OVR_SPUTTER };
+static const char* OVR_NAMES[] = {"follow", "flicker", "freakout", "coma", "off",
+                                  "custom", "pegged", "scan", "sputter"};
 static MeterOverride overrides[METER_COUNT] = {};
 
 // Current pattern of each STYLE_LIGHT channel (dashboard-selectable).
@@ -308,9 +351,52 @@ static LightPattern lightPatterns[METER_COUNT] = {};
 // dashboard (persisted in flash).
 static String chanNames[METER_COUNT];
 
+#define MAX_STEPS 16
+
+// Custom gauge sequences: position (0-100%) held for a duration (ms), looped.
+// Edited live from the dashboard, persisted in flash.
+static uint8_t seqPos[METER_COUNT][MAX_STEPS];
+static uint16_t seqDur[METER_COUNT][MAX_STEPS];
+static uint8_t seqLen[METER_COUNT] = {};
+
+static String seqToString(int idx) {
+    String s;
+    for (int i = 0; i < seqLen[idx]; i++) {
+        if (i) s += ",";
+        s += seqPos[idx][i];
+        s += ":";
+        s += seqDur[idx][i];
+    }
+    return s;
+}
+
+static bool parseSeq(const String& s, int idx) {
+    uint8_t tp[MAX_STEPS];
+    uint16_t td[MAX_STEPS];
+    uint8_t n = 0;
+    int start = 0;
+    while (start < (int)s.length() && n < MAX_STEPS) {
+        int comma = s.indexOf(',', start);
+        if (comma < 0) comma = s.length();
+        int colon = s.indexOf(':', start);
+        if (colon < 0 || colon >= comma) return false;
+        long p = s.substring(start, colon).toInt();
+        long d = s.substring(colon + 1, comma).toInt();
+        if (p < 0 || p > 100 || d < 20 || d > 20000) return false;
+        tp[n] = (uint8_t)p;
+        td[n] = (uint16_t)d;
+        n++;
+        start = comma + 1;
+    }
+    if (n == 0) return false;
+    memcpy(seqPos[idx], tp, sizeof(tp));
+    memcpy(seqDur[idx], td, sizeof(td));
+    seqLen[idx] = n;
+    return true;
+}
+
 // Custom blink rhythms: on/off durations in ms, alternating, starting with
 // ON. Edited live from the dashboard, persisted in flash.
-#define MAX_STEPS 16
 static uint16_t customSteps[METER_COUNT][MAX_STEPS];
 static uint8_t customLen[METER_COUNT] = {};
 static Preferences prefs;
@@ -436,10 +522,8 @@ static void handleStatus() {
         body += isLight ? "light" : "meter";
         body += "\",\"mode\":\"";
         body += isLight ? LP_NAMES[lightPatterns[i]] : OVR_NAMES[overrides[i]];
-        if (isLight) {
-            body += "\",\"steps\":\"";
-            body += stepsToString(i);
-        }
+        body += "\",\"steps\":\"";
+        body += isLight ? stepsToString(i) : seqToString(i);
         body += "\"}";
     }
     body += "]}\n";
@@ -504,6 +588,30 @@ static void handlePattern() {
     lightPatterns[idx] = LP_CUSTOM;
     savePatternPrefs(idx);
     logMsg(chanNames[idx] + " custom: " + stepsToString(idx));
+    server.send(200, "application/json", "{\"ok\":true}\n");
+}
+
+// /mpattern?meter=<1-N or name>&steps=80:500,20:300,... — set a gauge's
+// custom choreography (position%:hold-ms pairs, looped) and switch the
+// channel to it. Persisted in flash.
+static void handleMPattern() {
+    String m = server.arg("meter");
+    int idx = -1;
+    for (int i = 0; i < METER_COUNT; i++) {
+        if (m == chanNames[i] || m == METERS[i].name || m.toInt() == i + 1) { idx = i; break; }
+    }
+    if (idx < 0 || METERS[idx].style == STYLE_LIGHT) {
+        server.send(400, "application/json", "{\"error\":\"not a gauge\"}\n");
+        return;
+    }
+    if (!parseSeq(server.arg("steps"), idx)) {
+        server.send(400, "application/json",
+                    "{\"error\":\"steps must be 1-16 pos:ms pairs (pos 0-100, ms 20-20000)\"}\n");
+        return;
+    }
+    overrides[idx] = OVR_CUSTOM;
+    prefs.putString((String("mq") + idx).c_str(), seqToString(idx));
+    logMsg(chanNames[idx] + " choreography: " + seqToString(idx));
     server.send(200, "application/json", "{\"ok\":true}\n");
 }
 
@@ -644,9 +752,18 @@ button.on{box-shadow:inset 0 0 18px rgba(0,0,0,.7),0 0 14px currentColor;filter:
 .chan{padding:.5rem 0;border-bottom:1px solid var(--edge2)}
 .chan:last-child{border-bottom:0}
 .mrow{display:flex;align-items:center;justify-content:space-between}
-.pbar{display:flex;height:15px;border:1px solid var(--edge2);border-radius:2px;
-overflow:hidden;cursor:pointer;margin-top:.45rem;background:#0d0a07}
-.pbar .on{background:#c9a44a}.pbar .off{background:#241c12}
+.pbar{display:flex;align-items:flex-end;height:15px;border:1px solid var(--edge2);
+border-radius:2px;overflow:hidden;cursor:pointer;margin-top:.45rem;background:#0d0a07}
+.pbar .on{background:#c9a44a;height:100%}.pbar .off{background:#241c12;height:100%}
+.pbar .gs{background:#8fa8c9}
+.hrow{display:flex;justify-content:space-between;align-items:center;padding:.35rem 0;
+border-bottom:1px solid var(--edge2)}
+.hrow:last-child{border-bottom:0}
+.hrow .on2{color:#8fd18f;font-size:.85rem}
+.hrow .off2{color:#6b6b6b;font-size:.85rem}
+#pgauge{height:12px;border:1px solid var(--edge);border-radius:2px;background:#0d0a07;
+margin:.6rem 0 .2rem;overflow:hidden}
+#pfill{height:100%;width:0%;background:#8fa8c9;transition:width .25s}
 #edmodal{position:fixed;inset:0;background:rgba(5,4,2,.85);display:flex;
 align-items:center;justify-content:center;z-index:9;padding:1rem}
 #edmodal[hidden]{display:none}
@@ -698,6 +815,8 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <button class="b-off" data-m="off" id="offbtn" onclick="toggleOff()">&#9760; Extinguish All<small>kill every pin</small></button>
 </div></div>
 <div class="orn">&#10087;</div>
+<div class="card"><label>The Herd</label><div id="herd"></div></div>
+<div class="orn">&#10087;</div>
 <div class="card"><label id="instlabel">The Instruments</label><div id="meters"></div></div>
 <div class="orn mobile">&#10087;</div>
 </div><div class="colR">
@@ -709,6 +828,7 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <label id="edtitle">Rhythm Editor</label>
 <div id="edbar" class="pbar" style="cursor:default"></div>
 <div id="plamp"></div>
+<div id="pgauge" hidden><div id="pfill"></div></div>
 <div id="edrows"></div>
 <div class="ebtns"><button onclick="edAdd()">+ Add Step</button></div>
 <input id="edtext" onchange="edFromText()">
@@ -717,7 +837,21 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <button onclick="edClose()">Cancel</button>
 </div></div></div>
 <script>
-const OVRS=['follow','flicker','freakout','coma','off'];
+const OVRS=['follow','flicker','freakout','coma','off','custom','pegged','scan','sputter'];
+const HERD=[[1,201],[2,202]];
+async function herdCheck(){
+ const rows=await Promise.all(HERD.map(async([n,o])=>{
+  try{
+   const c=new AbortController();const t=setTimeout(()=>c.abort(),1500);
+   const s=await (await fetch('http://192.168.71.'+o+'/status',{signal:c.signal})).json();
+   clearTimeout(t);
+   return '<div class="hrow"><span class="mname">BOARD '+n+'<span class="mpin">.'+o+'</span></span>'+
+    '<span class="on2">&#9679; '+s.mode+'</span></div>';
+  }catch(e){
+   return '<div class="hrow"><span class="mname">BOARD '+n+'<span class="mpin">.'+o+'</span></span>'+
+    '<span class="off2">&#9675; unreachable</span></div>';
+  }}));
+ document.getElementById('herd').innerHTML=rows.join('');}
 const LPATS=['dark','steady','doubleblink','breathe','candle','strobe','random','custom'];
 const COLORS={flicker:'var(--green)',freakout:'var(--red)',coma:'var(--blue)',sweep:'var(--amber)',off:'#3a3a3a'};
 let curMode='',curBase='',shownKey='x';
@@ -741,6 +875,12 @@ function barHTML(str){
  const tot=st.reduce((a,b)=>a+b,0);
  return st.map((v,j)=>'<div class="'+(j%2?'off':'on')+'" style="width:'+(v/tot*100)+'%"></div>').join('');
 }
+function barHTMLG(str){
+ const st=(str||'').split(',').map(s=>s.split(':').map(Number)).filter(a=>a.length===2&&a[1]>0);
+ if(!st.length)return'';
+ const tot=st.reduce((a,b)=>a+b[1],0);
+ return st.map(a=>'<div class="gs" style="width:'+(a[1]/tot*100)+'%;height:'+Math.max(a[0],5)+'%"></div>').join('');
+}
 function renderMeters(ms,key){
  metersCache=ms;
  const box=document.getElementById('meters');
@@ -755,8 +895,8 @@ function renderMeters(ms,key){
     '<span class="mpin">pin '+m.pin+'</span></span>'+
     '<select onchange="setM('+(i+1)+',this.value)">'+
     opts.map(o=>'<option'+(o===m.mode?' selected':'')+'>'+o+'</option>').join('')+'</select></div>';
-   if(m.type==='light')
-    h+='<div class="pbar" id="pb'+i+'" title="tap to edit rhythm" onclick="edOpen('+i+')">'+barHTML(m.steps)+'</div>';
+   h+='<div class="pbar" id="pb'+i+'" title="tap to edit" onclick="edOpen('+i+')">'+
+    (m.type==='light'?barHTML(m.steps):barHTMLG(m.steps))+'</div>';
    d.innerHTML=h;
    box.appendChild(d);});
  }else{
@@ -764,48 +904,83 @@ function renderMeters(ms,key){
    const s=box.children[i].querySelector('select');
    if(document.activeElement!==s)s.value=m.mode;
    const pb=document.getElementById('pb'+i);
-   if(pb&&edIdx<0)pb.innerHTML=barHTML(m.steps);});
+   if(pb&&edIdx<0)pb.innerHTML=m.type==='light'?barHTML(m.steps):barHTMLG(m.steps);});
  }}
 
-// ---- visual rhythm editor ----
-let edIdx=-1,edSteps=[],pTimer=null,pPos=0;
+// ---- visual rhythm/choreography editor (lights + gauges) ----
+let edIdx=-1,edType='light',edSteps=[],pTimer=null,pPos=0;
 function edOpen(i){
- edIdx=i;
- edSteps=(metersCache[i].steps||'200,150,200,600').split(',').map(Number).filter(v=>v>0);
- document.getElementById('edtitle').textContent='Rhythm — '+metersCache[i].name.toUpperCase();
+ edIdx=i;edType=metersCache[i].type;
+ if(edType==='light'){
+  edSteps=(metersCache[i].steps||'200,150,200,600').split(',').map(Number).filter(v=>v>0);
+ }else{
+  edSteps=(metersCache[i].steps||'20:900,85:500,45:1200').split(',')
+   .map(s=>s.split(':').map(Number)).filter(a=>a.length===2&&a[1]>0);
+ }
+ document.getElementById('edtitle').textContent=
+  (edType==='light'?'Rhythm — ':'Choreography — ')+metersCache[i].name.toUpperCase();
+ document.getElementById('plamp').hidden=edType!=='light';
+ document.getElementById('pgauge').hidden=edType==='light';
  document.getElementById('edmodal').hidden=false;
- edDraw();pStart();}
+ edDraw();pRestart();}
+function edStr(){return edType==='light'?edSteps.join(','):edSteps.map(a=>a[0]+':'+a[1]).join(',');}
+function edBar(){
+ const b=document.getElementById('edbar');
+ if(edType==='light'){
+  const tot=edSteps.reduce((a,b2)=>a+b2,0);
+  b.innerHTML=edSteps.map((v,j)=>'<div class="'+(j%2?'off':'on')+'" style="width:'+(v/tot*100)+'%"></div>').join('');
+ }else{
+  const tot=edSteps.reduce((a,b2)=>a+b2[1],0);
+  b.innerHTML=edSteps.map(a=>'<div class="gs" style="width:'+(a[1]/tot*100)+'%;height:'+Math.max(a[0],5)+'%"></div>').join('');
+ }}
 function edDraw(){
- const tot=edSteps.reduce((a,b)=>a+b,0);
- document.getElementById('edbar').innerHTML=edSteps.map((v,j)=>
-  '<div class="'+(j%2?'off':'on')+'" style="width:'+(v/tot*100)+'%"></div>').join('');
- document.getElementById('edrows').innerHTML=edSteps.map((v,j)=>
-  '<div class="erow"><span>'+(j%2?'OFF':'ON')+'</span>'+
-  '<input type="range" min="20" max="2000" step="10" value="'+Math.min(v,2000)+'" oninput="edVal('+j+',this.value)">'+
-  '<b id="ev'+j+'">'+v+'ms</b>'+
-  '<button onclick="edDel('+j+')">&#10005;</button></div>').join('');
- document.getElementById('edtext').value=edSteps.join(',');}
+ edBar();
+ const rows=document.getElementById('edrows');
+ if(edType==='light'){
+  rows.innerHTML=edSteps.map((v,j)=>
+   '<div class="erow"><span>'+(j%2?'OFF':'ON')+'</span>'+
+   '<input type="range" min="20" max="2000" step="10" value="'+Math.min(v,2000)+'" oninput="edVal('+j+',this.value)">'+
+   '<b id="ev'+j+'">'+v+'ms</b><button onclick="edDel('+j+')">&#10005;</button></div>').join('');
+ }else{
+  rows.innerHTML=edSteps.map((a,j)=>
+   '<div class="erow"><span>'+(j+1)+'</span>'+
+   '<input type="range" min="0" max="100" value="'+a[0]+'" oninput="edValG('+j+',0,this.value)">'+
+   '<b id="ep'+j+'">'+a[0]+'%</b>'+
+   '<input type="range" min="20" max="3000" step="10" value="'+Math.min(a[1],3000)+'" oninput="edValG('+j+',1,this.value)">'+
+   '<b id="ed'+j+'">'+a[1]+'ms</b><button onclick="edDel('+j+')">&#10005;</button></div>').join('');
+ }
+ document.getElementById('edtext').value=edStr();}
 function edVal(j,v){edSteps[j]=+v;document.getElementById('ev'+j).textContent=v+'ms';
- document.getElementById('edtext').value=edSteps.join(',');
- const tot=edSteps.reduce((a,b)=>a+b,0);
- document.getElementById('edbar').innerHTML=edSteps.map((s,k)=>
-  '<div class="'+(k%2?'off':'on')+'" style="width:'+(s/tot*100)+'%"></div>').join('');
- pRestart();}
+ document.getElementById('edtext').value=edStr();edBar();pRestart();}
+function edValG(j,k,v){edSteps[j][k]=+v;
+ document.getElementById(k?'ed'+j:'ep'+j).textContent=v+(k?'ms':'%');
+ document.getElementById('edtext').value=edStr();edBar();pRestart();}
 function edDel(j){if(edSteps.length>1){edSteps.splice(j,1);edDraw();pRestart();}}
-function edAdd(){if(edSteps.length<16){edSteps.push(200);edDraw();pRestart();}}
+function edAdd(){if(edSteps.length<16){edSteps.push(edType==='light'?200:[50,500]);edDraw();pRestart();}}
 function edFromText(){
- const st=document.getElementById('edtext').value.split(',').map(Number).filter(v=>v>=20&&v<=20000);
- if(st.length){edSteps=st.slice(0,16);edDraw();pRestart();}}
-function pStart(){pPos=0;pTick();}
+ const t=document.getElementById('edtext').value;
+ if(edType==='light'){
+  const st=t.split(',').map(Number).filter(v=>v>=20&&v<=20000);
+  if(st.length)edSteps=st.slice(0,16);
+ }else{
+  const st=t.split(',').map(s=>s.split(':').map(Number))
+   .filter(a=>a.length===2&&a[0]>=0&&a[0]<=100&&a[1]>=20&&a[1]<=20000);
+  if(st.length)edSteps=st.slice(0,16);
+ }
+ edDraw();pRestart();}
 function pTick(){
- const lamp=document.getElementById('plamp');
- lamp.classList.toggle('lit',pPos%2===0);
- pTimer=setTimeout(()=>{pPos=(pPos+1)%edSteps.length;pTick()},edSteps[pPos]);}
-function pRestart(){clearTimeout(pTimer);pStart();}
+ if(edType==='light'){
+  document.getElementById('plamp').classList.toggle('lit',pPos%2===0);
+  pTimer=setTimeout(()=>{pPos=(pPos+1)%edSteps.length;pTick()},edSteps[pPos]);
+ }else{
+  document.getElementById('pfill').style.width=edSteps[pPos][0]+'%';
+  pTimer=setTimeout(()=>{pPos=(pPos+1)%edSteps.length;pTick()},edSteps[pPos][1]);
+ }}
+function pRestart(){clearTimeout(pTimer);pPos=0;pTick();}
 function edClose(){clearTimeout(pTimer);document.getElementById('edmodal').hidden=true;edIdx=-1;}
 async function edApply(){
- const n=edIdx+1;
- try{await fetch(curBase+'/pattern?meter='+n+'&steps='+encodeURIComponent(edSteps.join(',')))}catch(e){}
+ const n=edIdx+1,ep=edType==='light'?'/pattern':'/mpattern';
+ try{await fetch(curBase+ep+'?meter='+n+'&steps='+encodeURIComponent(edStr()))}catch(e){}
  edClose();refresh();}
 async function refresh(){try{
  const s=await (await fetch('/status')).json();
@@ -829,6 +1004,7 @@ async function refresh(){try{
   ms=ts.meters;mb=ts.board}catch(e){ms=[];mb=t+' (unreachable)'}}
  document.getElementById('instlabel').textContent='The Instruments — Board '+mb;
  renderMeters(ms,curBase);
+ herdCheck();
  document.getElementById('jlabel').textContent='The Journal — Board '+mb;
  const log=document.getElementById('log');
  try{log.textContent=await (await fetch(curBase+'/log')).text();
@@ -891,6 +1067,13 @@ void setup() {
         String saved = prefs.getString((String("cs") + i).c_str(), "");
         if (saved.length()) parseSteps(saved, i);
         chanNames[i] = prefs.getString((String("nm") + i).c_str(), METERS[i].name);
+        // Default gauge choreography: low simmer, spike, settle.
+        seqPos[i][0] = 20; seqDur[i][0] = 900;
+        seqPos[i][1] = 85; seqDur[i][1] = 500;
+        seqPos[i][2] = 45; seqDur[i][2] = 1200;
+        seqLen[i] = 3;
+        String sq = prefs.getString((String("mq") + i).c_str(), "");
+        if (sq.length()) parseSeq(sq, i);
     }
     Serial.printf("Frankenstein Meters: flickering %d meter(s)\n", METER_COUNT);
 
@@ -900,6 +1083,7 @@ void setup() {
     server.on("/", handlePanel);
     server.on("/set", handleSet);
     server.on("/pattern", handlePattern);
+    server.on("/mpattern", handleMPattern);
     server.on("/rename", handleRename);
     server.on("/status", handleStatus);
     server.on("/log", handleLog);
@@ -983,6 +1167,10 @@ void loop() {
                     case OVR_FREAKOUT: meters[i].tick(true, false); break;
                     case OVR_COMA:     meters[i].tick(false, true); break;
                     case OVR_OFF:      meters[i].tickOff(); break;
+                    case OVR_CUSTOM:   meters[i].tickSeq(seqPos[i], seqDur[i], seqLen[i]); break;
+                    case OVR_PEGGED:   meters[i].tickPegged(); break;
+                    case OVR_SCAN:     meters[i].tickScan(); break;
+                    case OVR_SPUTTER:  meters[i].tickSputter(); break;
                 }
             }
         }
