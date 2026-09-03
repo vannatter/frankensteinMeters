@@ -540,6 +540,9 @@ static void handleStatus() {
         body += METERS[i].pin;
         body += ",\"type\":\"";
         body += isLight ? "light" : "meter";
+        body += "\",\"style\":\"";
+        body += METERS[i].style == STYLE_HEARTBEAT ? "heartbeat"
+                : (isLight ? "light" : "flicker");
         body += "\",\"mode\":\"";
         body += isLight ? LP_NAMES[lightPatterns[i]] : OVR_NAMES[overrides[i]];
         body += "\",\"steps\":\"";
@@ -899,7 +902,7 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <script>
 const OVRS=['follow','flicker','freakout','coma','off','custom','fuzzy','heartbeat','pegged','scan','sputter'];
 let HERD=[],PREFIX='http://192.168.71.';
-let herdMeta={},herdSig='';
+let herdMeta={},herdMode={},herdSig='';
 async function loadHerd(){
  try{
   const h=await (await fetch('/herd')).json();
@@ -918,9 +921,9 @@ async function herdCheck(){
    const c=new AbortController();const t=setTimeout(()=>c.abort(),1500);
    const s=await (await fetch(PREFIX+o+'/status',{signal:c.signal})).json();
    clearTimeout(t);
-   herdMeta[o]=s.meters;
+   herdMeta[o]=s.meters;herdMode[o]=s.mode;
    return {n:n,o:o,ok:1,mode:s.mode,ms:s.meters};
-  }catch(e){delete herdMeta[o];return {n:n,o:o,ok:0};}
+  }catch(e){delete herdMeta[o];delete herdMode[o];return {n:n,o:o,ok:0};}
  }));
  const sig=JSON.stringify(parts.map(p=>[p.n,p.ok,p.mode,(p.ms||[]).map(m=>m.name+m.type)]));
  if(sig===herdSig)return;
@@ -937,41 +940,111 @@ async function herdCheck(){
     :'<div class="gw"><div class="gn" id="lv'+p.o+'_'+i+'"></div></div>')+
    '<div class="wname">'+m.name+'</div></div>').join('')+'</div>';
   return h;}).join('');}
-// Fast poll of every reachable board's real output levels; a 60fps
-// animation loop eases the widgets toward the latest readings so they move
-// like the physical needles instead of stepping between samples.
-let liveT={},liveBusy=false;
-async function pollLive(){
- if(liveBusy)return;
- liveBusy=true;
- await Promise.all(HERD.map(async([n,o])=>{
-  if(!herdMeta[o])return;
-  try{
-   const c=new AbortController();const t=setTimeout(()=>c.abort(),600);
-   const d=await (await fetch(PREFIX+o+'/live',{signal:c.signal})).json();
-   clearTimeout(t);
-   d.v.forEach((v,i)=>{
-    const k=o+'_'+i;
-    if(!liveT[k])liveT[k]={c:v,t:v};else liveT[k].t=v;});
-  }catch(e){}
- }));
- liveBusy=false;}
-setInterval(pollLive,150);
+// The lab miniature: a 60fps client-side twin of the firmware's pattern
+// engines. Deterministic patterns (heartbeat, blinks, breathe, sweep,
+// custom sequences) use the same math as the boards; random behaviors
+// (flicker, freakout, candle...) roll their own dice with the same
+// character. Modes/patterns come from the 2s status refresh.
+const R=(a,b)=>a+Math.random()*(b-a);
+const tri=(t,p)=>{const x=(t%p)/p;return x<0.5?x*2:2-x*2;};
+let simS={};
+function heartSim(t,bm){
+ let per=1400,amp=.65,base=.06;
+ if(bm==='freakout'){per=550;amp=1;base=.1}
+ else if(bm==='coma'){per=2800;amp=.3;base=.03}
+ const ph=(t%per)/per;
+ if(ph<0.24)return (base+(amp*0.68-base)*Math.sin(Math.PI*ph/0.24))*100;
+ if(ph<0.32)return base*100;
+ if(ph<0.60)return (base+(amp-base)*Math.sin(Math.PI*(ph-0.32)/0.28))*100;
+ return base*100;}
+function seqAt(steps,t,gauge){
+ const st=(steps||'').split(',').map(s=>gauge?s.split(':').map(Number):Number(s))
+  .filter(a=>gauge?a.length===2&&a[1]>0:a>0);
+ if(!st.length)return 0;
+ const tot=st.reduce((a,b)=>a+(gauge?b[1]:b),0);
+ let x=t%tot;
+ for(let j=0;j<st.length;j++){
+  const d=gauge?st[j][1]:st[j];
+  if(x<d)return gauge?st[j][0]:(j%2?0:100);
+  x-=d;}
+ return 0;}
+function gTarget(s,m,bm,t){
+ const md=m.mode==='follow'?bm:m.mode;
+ if(bm==='off'||md==='off')return 0;
+ if(bm==='sweep')return tri(t,8000)*100;
+ if(m.style==='heartbeat'&&m.mode==='follow')return heartSim(t,bm);
+ switch(md){
+  case 'freakout':
+   if(s.seizeTo>t)return R(90,100);
+   if(t>s.flipAt){s.hi=!s.hi;s.flipAt=t+R(280,550);
+    if(s.hi&&Math.random()<0.14)s.seizeTo=t+R(700,1600);
+    s.wt=s.hi?R(88,100):R(0,12);}
+   return s.wt||20;
+  case 'coma':
+   if(t>s.nw){s.wt=R(2,10);s.nw=t+R(2000,6000);}
+   if(t>s.nsu){s.su=R(8,16);s.nsu=t+R(8000,25000);}
+   s.su=(s.su||0)*0.995;
+   return (s.wt||5)+s.su;
+  case 'heartbeat':return heartSim(t,'flicker');
+  case 'custom':return seqAt(m.steps,t,true);
+  case 'fuzzy':
+   if(t>s.fz){s.fz=t+R(400,900);s.fo=R(-8,8);}
+   return Math.max(0,Math.min(100,seqAt(m.steps,t,true)+(s.fo||0)+R(-1,1)));
+  case 'pegged':return 95+R(-2,2);
+  case 'scan':return tri(t,7000)*100;
+  case 'sputter':
+   if(t>s.nw){s.wt=Math.random()<0.3?R(10,28):R(2,6);s.nw=t+R(300,1800);}
+   return s.wt||4;
+  default: // flicker
+   if(t>s.nw){s.wt=R(15,45);s.nw=t+R(1200,3500);}
+   if(t>s.nsu){s.su=R(35,70);s.nsu=t+R(4000,12000);}
+   s.su=(s.su||0)*0.99;
+   return (s.wt||25)+s.su+R(-2,2);
+ }}
+function lTarget(s,m,bm,t){
+ if(bm==='off'||bm==='coma')return 0;
+ if(bm==='freakout'){
+  if(t>s.flipAt){s.on=!s.on;s.flipAt=t+(s.on?R(30,90):R(30,120));}
+  return s.on?100:0;}
+ if(bm==='sweep')return tri(t,8000)*100;
+ switch(m.mode){
+  case 'steady':return 100;
+  case 'doubleblink':{const x=t%1100;return (x<200||(x>=350&&x<550))?100:0;}
+  case 'breathe':{const ph=(t%2600)/2600;return (0.05+0.475*(1-Math.cos(2*Math.PI*ph)))*100;}
+  case 'candle':
+   if(t>s.nw){s.wt=R(35,100);s.nw=t+R(60,240);}
+   s.c2=(s.c2===undefined?50:s.c2)+((s.wt||60)-(s.c2||50))*0.15;
+   return s.c2;
+  case 'strobe':
+   if(t>s.flipAt){s.on=!s.on;s.flipAt=t+(s.on?R(30,90):R(30,120));}
+   return s.on?100:0;
+  case 'random':
+   if(t>s.flipAt){s.on=!s.on;s.flipAt=t+R(90,1400);}
+   return s.on?100:0;
+  case 'custom':return seqAt(m.steps,t,false);
+  default:return 0;}}
 function animLab(){
- for(const k in liveT){
-  const el=document.getElementById('lv'+k);
-  if(!el)continue;
-  const[o,i]=k.split('_');
-  const m=herdMeta[o]&&herdMeta[o][+i];
-  if(!m)continue;
-  const s=liveT[k];
-  s.c+=(s.t-s.c)*(m.type==='light'?0.5:0.22);
-  if(m.type==='light'){
-   el.style.background='rgba(255,213,87,'+(s.c/100)+')';
-   el.style.boxShadow=s.c>15?'0 0 '+(4+s.c/8)+'px rgba(255,213,87,.8)':'none';
-  }else{
-   el.style.transform='rotate('+(-80+s.c*1.6)+'deg)';
-  }}
+ const t=performance.now();
+ for(const o in herdMeta){
+  const bm=(herdMode[o]||'flicker');
+  herdMeta[o].forEach((m,i)=>{
+   const el=document.getElementById('lv'+o+'_'+i);
+   if(!el)return;
+   const k=o+'_'+i;
+   if(!simS[k])simS[k]={c:0,flipAt:0,nw:0,nsu:0,fz:0,seizeTo:0};
+   const s=simS[k];
+   if(m.type==='light'){
+    const tv=lTarget(s,m,bm,t);
+    s.c+=(tv-s.c)*0.6;
+    el.style.background='rgba(255,213,87,'+(s.c/100)+')';
+    el.style.boxShadow=s.c>15?'0 0 '+(4+s.c/8)+'px rgba(255,213,87,.8)':'none';
+   }else{
+    const tv=gTarget(s,m,bm,t);
+    const md=m.mode==='follow'?bm:m.mode;
+    s.c+=(tv-s.c)*(md==='freakout'?0.35:0.12);
+    el.style.transform='rotate('+(-80+s.c*1.6)+'deg)';
+   }});
+ }
  requestAnimationFrame(animLab);}
 requestAnimationFrame(animLab);
 const LPATS=['dark','steady','doubleblink','breathe','candle','strobe','random','custom'];
