@@ -1,0 +1,6 @@
+.pio/
+.idea/
+.vscode/
+compile_commands.json
+src/secrets.h
+.cache/

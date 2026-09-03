@@ -1,0 +1,953 @@
+// Frankenstein Meters — random needle flicker for old analog panel meters.
+//
+// Each meter is driven by high-frequency PWM through a series resistor; the
+// meter movement averages the duty cycle into a deflection. Normal mode layers
+// three behaviors per meter:
+//   1. a slowly wandering idle baseline,
+//   2. occasional surges toward full scale that decay back down,
+//   3. constant fine jitter,
+// then slews the output toward that target so the motion looks mechanical
+// rather than digital.
+//
+// Freakout mode (triggered over the network or 'f' on serial) pins every
+// needle high with violent thrashing until the timer runs out or /calm.
+//
+// HTTP API (also works from a browser):
+//   /            → status
+//   /freakout    → start a freakout (optional ?seconds=N, 0 = until /calm)
+//   /sweep       → slow 0-100-0% calibration ramp on all meters, until /calm
+//   /calm        → back to normal immediately
+// Serial keys for testing without the network: f = freakout, s = sweep,
+// c = calm.
+
+#include <Arduino.h>
+#include <ESPmDNS.h>
+#include <HTTPClient.h>
+#include <Preferences.h>
+#include <WebServer.h>
+#include <WiFi.h>
+
+#include "config.h"
+#include "secrets.h"
+
+static const uint32_t TICK_MS = 10;
+
+static float frand(float lo, float hi) {
+    return lo + (hi - lo) * (esp_random() / 4294967295.0f);
+}
+
+class FlickerMeter {
+public:
+    void begin(const MeterProfile& profile, int channel) {
+        p_ = &profile;
+        channel_ = channel;
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+        ledcAttach(p_->pin, PWM_FREQ_HZ, PWM_RESOLUTION_BITS);
+#else
+        ledcSetup(channel_, PWM_FREQ_HZ, PWM_RESOLUTION_BITS);
+        ledcAttachPin(p_->pin, channel_);
+#endif
+        position_ = frand(p_->idleMin, p_->idleMax);
+        wanderTarget_ = frand(p_->idleMin, p_->idleMax);
+        speed_ = p_->speed * frand(0.85f, 1.15f);
+        scheduleNextSurge();
+        scheduleNextWander();
+    }
+
+    // Ease the needle down to zero and hold it there.
+    void tickOff() {
+        position_ += (0.0f - position_) * 0.1f;
+        writeDuty(position_);
+    }
+
+    // Light channel: show the selected pattern — except panic always strobes
+    // and coma always darkens, regardless of the pattern.
+    void tickLight(LightPattern pat, bool freakout, bool coma,
+                   const uint16_t* steps = nullptr, uint8_t nsteps = 0) {
+        uint32_t now = millis();
+        if (freakout) pat = LP_STROBE;
+        else if (coma) pat = LP_DARK;
+
+        switch (pat) {
+            case LP_DARK:
+                strobeOn_ = false;
+                writeDuty(0.0f);
+                break;
+            case LP_STEADY:
+                writeDuty(1.0f);
+                break;
+            case LP_DOUBLE: {
+                // on-on-off: blink, blink, longer pause. ~1.1 s cycle.
+                uint32_t t = now % 1100;
+                writeDuty((t < 200 || (t >= 350 && t < 550)) ? 1.0f : 0.0f);
+                break;
+            }
+            case LP_BREATHE: {
+                float ph = (now % 2600) / 2600.0f;
+                writeDuty(0.05f + 0.475f * (1.0f - cosf(2.0f * PI * ph)));
+                break;
+            }
+            case LP_CANDLE:
+                // Organic gas-lamp wander between 35% and 100%.
+                if ((int32_t)(now - nextWanderAt_) >= 0) {
+                    wanderTarget_ = frand(0.35f, 1.0f);
+                    nextWanderAt_ = now + (uint32_t)frand(60.0f, 240.0f);
+                }
+                position_ += (wanderTarget_ - position_) * 0.15f;
+                writeDuty(position_);
+                break;
+            case LP_STROBE:
+                if ((int32_t)(now - strobeFlipAt_) >= 0) {
+                    strobeOn_ = !strobeOn_;
+                    strobeFlipAt_ = now + (uint32_t)(strobeOn_
+                        ? frand(STROBE_ON_MS_MIN, STROBE_ON_MS_MAX)
+                        : frand(STROBE_OFF_MS_MIN, STROBE_OFF_MS_MAX));
+                    writeDuty(strobeOn_ ? 1.0f : 0.0f);
+                }
+                break;
+            case LP_RANDOM:
+                // Unpredictable organic blinking, slower than the strobe.
+                if ((int32_t)(now - strobeFlipAt_) >= 0) {
+                    strobeOn_ = !strobeOn_;
+                    strobeFlipAt_ = now + (uint32_t)frand(90.0f, 1400.0f);
+                    writeDuty(strobeOn_ ? 1.0f : 0.0f);
+                }
+                break;
+            case LP_CUSTOM:
+                // User-edited rhythm: alternating on/off durations.
+                if (!steps || nsteps == 0) { writeDuty(0.0f); break; }
+                if (stepIdx_ >= nsteps) stepIdx_ = 0;
+                if ((int32_t)(now - strobeFlipAt_) >= 0) {
+                    stepIdx_ = (uint8_t)((stepIdx_ + 1) % nsteps);
+                    strobeFlipAt_ = now + steps[stepIdx_];
+                    writeDuty((stepIdx_ % 2 == 0) ? 1.0f : 0.0f);
+                }
+                break;
+        }
+    }
+
+    void tick(bool freakout, bool coma) {
+        uint32_t now = millis();
+        float target;
+
+        if (p_->style == STYLE_HEARTBEAT) {
+            tickHeartbeat(now, freakout, coma);
+            return;
+        }
+
+        // (STYLE_LIGHT channels are driven via tickLight from the main loop.)
+
+        if (freakout) {
+            // Being shocked: bursts of full-scale slams, then a seizure hold —
+            // locked up trembling near the top — then back to slamming.
+            surge_ = 0.0f;
+            if (seizing_) {
+                if ((int32_t)(now - seizeEndsAt_) >= 0) {
+                    seizing_ = false;
+                    slamsLeft_ = SLAMS_PER_BURST_MIN +
+                                 (int)frand(0.0f, (float)(SLAMS_PER_BURST_MAX - SLAMS_PER_BURST_MIN));
+                    nextWanderAt_ = now;
+                } else {
+                    // Rigid tremble pinned high, retargeted every tick (100 Hz).
+                    target = frand(SEIZE_MIN, SEIZE_MAX);
+                    position_ += (target - position_) * FREAK_SPEED;
+                    writeDuty(position_);
+                    return;
+                }
+            }
+            if ((int32_t)(now - nextWanderAt_) >= 0) {
+                freakHigh_ = !freakHigh_;
+                if (freakHigh_ && --slamsLeft_ <= 0) {
+                    seizing_ = true;
+                    seizeEndsAt_ = now + (uint32_t)frand(SEIZE_MS_MIN, SEIZE_MS_MAX);
+                }
+                wanderTarget_ = freakHigh_ ? frand(FREAK_HIGH_MIN, FREAK_HIGH_MAX)
+                                           : frand(FREAK_LOW_MIN, FREAK_LOW_MAX);
+                nextWanderAt_ = now + (uint32_t)frand(FREAK_FLIP_MS_MIN, FREAK_FLIP_MS_MAX);
+            }
+            target = wanderTarget_ + frand(-FREAK_JITTER, FREAK_JITTER);
+            position_ += (target - position_) * FREAK_SPEED;
+        } else if (coma) {
+            // Barely alive: slow low drift with a faint stir now and then.
+            if ((int32_t)(now - nextWanderAt_) >= 0) {
+                wanderTarget_ = frand(COMA_MIN, COMA_MAX);
+                nextWanderAt_ = now + (uint32_t)frand(2000.0f, 6000.0f);
+            }
+            if (surge_ > 0.001f) {
+                surge_ *= 0.995f;
+            } else if ((int32_t)(now - nextSurgeAt_) >= 0) {
+                surge_ = frand(COMA_STIR_MIN, COMA_STIR_MAX) - wanderTarget_;
+                nextSurgeAt_ = now + (uint32_t)(frand(COMA_STIR_INTERVAL_MIN_S,
+                                                      COMA_STIR_INTERVAL_MAX_S) * 1000.0f);
+            }
+            target = wanderTarget_ + surge_ + frand(-COMA_JITTER, COMA_JITTER);
+            position_ += (target - position_) * COMA_SPEED;
+        } else {
+            // Slow idle wander: pick a new spot in the idle band now and then.
+            if ((int32_t)(now - nextWanderAt_) >= 0) {
+                wanderTarget_ = frand(p_->idleMin, p_->idleMax);
+                scheduleNextWander();
+            }
+
+            // Surges: kick toward full scale, then decay back to baseline.
+            if (surge_ > 0.001f) {
+                surge_ *= surgeDecay_;
+            } else if ((int32_t)(now - nextSurgeAt_) >= 0) {
+                surge_ = frand(p_->surgeMin, p_->surgeMax) - wanderTarget_;
+                surgeDecay_ = frand(0.96f, 0.99f);
+                scheduleNextSurge();
+            }
+
+            target = wanderTarget_ + surge_ + frand(-p_->jitter, p_->jitter);
+            position_ += (target - position_) * speed_;
+        }
+
+        writeDuty(position_);
+    }
+
+    void writeDuty(float frac) {
+        int duty = (int)(constrain(frac, 0.0f, 1.0f) * p_->fullScaleDuty);
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+        ledcWrite(p_->pin, duty);
+#else
+        ledcWrite(channel_, duty);
+#endif
+    }
+
+private:
+    // Lub-dub: sharp main pulse, dip, smaller second pulse, then rest until
+    // the next beat. Beat length varies a little so it reads as organic.
+    void tickHeartbeat(uint32_t now, bool freakout, bool coma) {
+        float period = HEART_NORMAL_MS, amp = HEART_NORMAL_AMP, base = HEART_NORMAL_BASE;
+        if (freakout) { period = HEART_FREAK_MS; amp = HEART_FREAK_AMP; base = HEART_FREAK_BASE; }
+        else if (coma) { period = HEART_COMA_MS; amp = HEART_COMA_AMP; base = HEART_COMA_BASE; }
+
+        if (now - beatStart_ >= (uint32_t)(period * beatVary_)) {
+            beatStart_ = now;
+            beatVary_ = frand(0.92f, 1.08f);
+        }
+        // bump-bump ... pause: small sine hump, breath, bigger sine hump,
+        // then flat rest. Humps are kept wide and the slew gentle so a heavy
+        // needle rides the curve instead of getting yanked and ringing.
+        float ph = (now - beatStart_) / period;
+        float target = base;
+        if (ph < 0.24f)      target = base + (amp * 0.68f - base) * sinf(PI * (ph / 0.24f));
+        else if (ph < 0.32f) target = base;
+        else if (ph < 0.60f) target = base + (amp - base) * sinf(PI * ((ph - 0.32f) / 0.28f));
+        position_ += (target - position_) * 0.22f;
+        writeDuty(position_);
+    }
+
+    void scheduleNextSurge() {
+        nextSurgeAt_ = millis() + (uint32_t)(frand(p_->surgeSMin, p_->surgeSMax) * 1000.0f);
+    }
+
+    void scheduleNextWander() {
+        nextWanderAt_ = millis() + (uint32_t)frand(400.0f, 2500.0f);
+    }
+
+    const MeterProfile* p_ = nullptr;
+    int channel_ = 0;
+    float position_ = 0.0f;
+    float wanderTarget_ = 0.0f;
+    float surge_ = 0.0f;
+    float surgeDecay_ = 0.98f;
+    float speed_ = 0.08f;
+    bool freakHigh_ = false;
+    bool seizing_ = false;
+    int slamsLeft_ = SLAMS_PER_BURST_MIN;
+    uint32_t beatStart_ = 0;
+    float beatVary_ = 1.0f;
+    bool strobeOn_ = false;
+    uint32_t strobeFlipAt_ = 0;
+    uint8_t stepIdx_ = 0;
+    uint32_t seizeEndsAt_ = 0;
+    uint32_t nextSurgeAt_ = 0;
+    uint32_t nextWanderAt_ = 0;
+};
+
+static FlickerMeter meters[METER_COUNT];
+static WebServer server(80);
+static uint32_t lastTick = 0;
+
+// Rolling log: everything worth seeing lands here as well as on serial, so
+// the web control panel can show it.
+static String logLines[24];
+static int logHead = 0;
+
+static void logMsg(const String& msg) {
+    Serial.println(msg);
+    logLines[logHead] = String(millis() / 1000) + "s  " + msg;
+    logHead = (logHead + 1) % 24;
+}
+
+// Freakout state: 0 = calm. Otherwise the millis() deadline, or UINT32_MAX
+// for "until /calm".
+static uint32_t freakoutUntil = 0;
+
+// Calibration sweep mode: all meters ramp 0-100-0% slowly until /calm.
+static bool sweepMode = false;
+
+// Coma mode: barely-alive baseline. Persists through freakouts — a shock
+// convulsion ends and he sinks back into the coma.
+static bool comaMode = false;
+
+// Per-meter override: FOLLOW obeys the board mode; the rest pin that one
+// meter to a specific behavior regardless of what the lab is doing.
+enum MeterOverride { OVR_FOLLOW, OVR_FLICKER, OVR_FREAKOUT, OVR_COMA, OVR_OFF };
+static const char* OVR_NAMES[] = {"follow", "flicker", "freakout", "coma", "off"};
+static MeterOverride overrides[METER_COUNT] = {};
+
+// Current pattern of each STYLE_LIGHT channel (dashboard-selectable).
+static const char* LP_NAMES[] = {"dark", "steady", "doubleblink", "breathe",
+                                 "candle", "strobe", "random", "custom"};
+static const int LP_COUNT = 8;
+static LightPattern lightPatterns[METER_COUNT] = {};
+
+// Custom blink rhythms: on/off durations in ms, alternating, starting with
+// ON. Edited live from the dashboard, persisted in flash.
+#define MAX_STEPS 16
+static uint16_t customSteps[METER_COUNT][MAX_STEPS];
+static uint8_t customLen[METER_COUNT] = {};
+static Preferences prefs;
+
+static String stepsToString(int idx) {
+    String s;
+    for (int i = 0; i < customLen[idx]; i++) {
+        if (i) s += ",";
+        s += customSteps[idx][i];
+    }
+    return s;
+}
+
+static bool parseSteps(const String& s, int idx) {
+    uint16_t tmp[MAX_STEPS];
+    uint8_t n = 0;
+    int start = 0;
+    while (start < (int)s.length() && n < MAX_STEPS) {
+        int comma = s.indexOf(',', start);
+        if (comma < 0) comma = s.length();
+        long v = s.substring(start, comma).toInt();
+        if (v < 20 || v > 20000) return false;  // 20ms..20s per step
+        tmp[n++] = (uint16_t)v;
+        start = comma + 1;
+    }
+    if (n == 0) return false;
+    memcpy(customSteps[idx], tmp, sizeof(tmp));
+    customLen[idx] = n;
+    return true;
+}
+
+static void savePatternPrefs(int idx) {
+    prefs.putUChar((String("lp") + idx).c_str(), (uint8_t)lightPatterns[idx]);
+    prefs.putString((String("cs") + idx).c_str(), stepsToString(idx));
+}
+
+// Kill switch: every pin dark/zero until rekindled.
+static bool allOff = false;
+
+// When nonzero, the Try-Me trigger output is high until this millis() time.
+static uint32_t trymeOffAt = 0;
+
+static void pulseTryme() {
+#ifdef TRYME_PIN
+    digitalWrite(TRYME_PIN, HIGH);
+    trymeOffAt = millis() + TRYME_PULSE_MS;
+    logMsg("try-me trigger pulsed");
+#endif
+}
+
+static bool freakingOut() {
+    if (freakoutUntil == 0) return false;
+    if (freakoutUntil != UINT32_MAX && (int32_t)(millis() - freakoutUntil) >= 0) {
+        freakoutUntil = 0;
+        logMsg("freakout over, back to normal flicker");
+        return false;
+    }
+    return true;
+}
+
+static void startFreakout(long seconds) {
+    freakoutUntil = seconds <= 0 ? UINT32_MAX : millis() + (uint32_t)seconds * 1000;
+    logMsg(seconds <= 0 ? String("FREAKOUT! (until calm)")
+                        : "FREAKOUT! (" + String(seconds) + "s)");
+    pulseTryme();
+}
+
+static void sendToBoard(int octet, const String& path) {
+    HTTPClient http;
+    String url = BOARD_IP_PREFIX + String(octet) + path;
+    http.begin(url);
+    http.setConnectTimeout(1500);
+    http.setTimeout(1500);
+    int code = http.GET();
+    http.end();
+    logMsg("→ board ." + String(octet) + " " + path +
+           (code > 0 ? " ok" : " unreachable"));
+}
+
+// If the request carried ?all=1, repeat it to every other board in
+// ALL_BOARD_OCTETS (without the all flag, so it doesn't bounce around).
+static void forwardToPeers(const char* path) {
+    if (!server.hasArg("all") || WiFi.status() != WL_CONNECTED) return;
+    for (unsigned i = 0; i < sizeof(ALL_BOARD_OCTETS) / sizeof(int); i++) {
+        if (ALL_BOARD_OCTETS[i] == 200 + BOARD_ID) continue;
+        sendToBoard(ALL_BOARD_OCTETS[i], path);
+    }
+}
+
+// If the request carried ?board=N and N is some other board, relay the
+// command there instead of acting locally. Returns true when relayed.
+static bool relayedToBoard(const String& path) {
+    if (!server.hasArg("board")) return false;
+    int b = server.arg("board").toInt();
+    if (b == BOARD_ID) return false;
+    sendToBoard(200 + b, path);
+    server.send(200, "application/json", "{\"relayed\":" + String(b) + "}\n");
+    return true;
+}
+
+static const char* currentModeName() {
+    if (allOff) return "off";
+    if (sweepMode) return "sweep";
+    if (freakingOut()) return "freakout";
+    if (comaMode) return "coma";
+    return "flicker";
+}
+
+static void handleStatus() {
+    String body = "{\"board\":";
+    body += BOARD_ID;
+    body += ",\"mode\":\"";
+    body += currentModeName();
+    body += "\",\"meters\":[";
+    for (int i = 0; i < METER_COUNT; i++) {
+        bool isLight = METERS[i].style == STYLE_LIGHT;
+        if (i) body += ",";
+        body += "{\"name\":\"";
+        body += METERS[i].name;
+        body += "\",\"pin\":";
+        body += METERS[i].pin;
+        body += ",\"type\":\"";
+        body += isLight ? "light" : "meter";
+        body += "\",\"mode\":\"";
+        body += isLight ? LP_NAMES[lightPatterns[i]] : OVR_NAMES[overrides[i]];
+        if (isLight) {
+            body += "\",\"steps\":\"";
+            body += stepsToString(i);
+        }
+        body += "\"}";
+    }
+    body += "]}\n";
+    server.send(200, "application/json", body);
+}
+
+// /set?meter=<1-4 or name>&mode=<value> — for meter channels the value is an
+// override (follow|flicker|freakout|coma|off); for light channels it's a
+// pattern (dark|steady|doubleblink|breathe|candle|strobe).
+static void handleSet() {
+    String m = server.arg("meter");
+    String mode = server.arg("mode");
+    int idx = -1;
+    for (int i = 0; i < METER_COUNT; i++) {
+        if (m == METERS[i].name || m.toInt() == i + 1) { idx = i; break; }
+    }
+    if (idx < 0) {
+        server.send(400, "application/json", "{\"error\":\"bad meter\"}\n");
+        return;
+    }
+    if (METERS[idx].style == STYLE_LIGHT) {
+        for (unsigned i = 0; i < sizeof(LP_NAMES) / sizeof(char*); i++) {
+            if (mode == LP_NAMES[i]) {
+                lightPatterns[idx] = (LightPattern)i;
+                savePatternPrefs(idx);
+                logMsg(String(METERS[idx].name) + " → " + mode);
+                server.send(200, "application/json", "{\"ok\":true}\n");
+                return;
+            }
+        }
+    } else {
+        for (unsigned i = 0; i < sizeof(OVR_NAMES) / sizeof(char*); i++) {
+            if (mode == OVR_NAMES[i]) {
+                overrides[idx] = (MeterOverride)i;
+                logMsg(String(METERS[idx].name) + " → " + mode);
+                server.send(200, "application/json", "{\"ok\":true}\n");
+                return;
+            }
+        }
+    }
+    server.send(400, "application/json", "{\"error\":\"bad mode\"}\n");
+}
+
+// /pattern?meter=<1-4 or name>&steps=200,150,200,600 — set a light's custom
+// blink rhythm (on/off ms, alternating, starts ON) and switch it to that
+// pattern. Live, no reflash; persisted in flash.
+static void handlePattern() {
+    String m = server.arg("meter");
+    int idx = -1;
+    for (int i = 0; i < METER_COUNT; i++) {
+        if (m == METERS[i].name || m.toInt() == i + 1) { idx = i; break; }
+    }
+    if (idx < 0 || METERS[idx].style != STYLE_LIGHT) {
+        server.send(400, "application/json", "{\"error\":\"not a light\"}\n");
+        return;
+    }
+    if (!parseSteps(server.arg("steps"), idx)) {
+        server.send(400, "application/json",
+                    "{\"error\":\"steps must be 1-16 comma-separated ms values, 20-20000\"}\n");
+        return;
+    }
+    lightPatterns[idx] = LP_CUSTOM;
+    savePatternPrefs(idx);
+    logMsg(String(METERS[idx].name) + " custom: " + stepsToString(idx));
+    server.send(200, "application/json", "{\"ok\":true}\n");
+}
+
+static void handleLog() {
+    String body;
+    for (int i = 0; i < 24; i++) {
+        const String& line = logLines[(logHead + i) % 24];
+        if (line.length()) body += line + "\n";
+    }
+    server.send(200, "text/plain", body);
+}
+
+static void handleFreakout() {
+    long seconds = FREAKOUT_DEFAULT_S;
+    if (server.hasArg("seconds")) seconds = server.arg("seconds").toInt();
+    String path = seconds == FREAKOUT_DEFAULT_S
+                      ? String("/freakout")
+                      : String("/freakout?seconds=") + seconds;
+    if (relayedToBoard(path)) return;
+    sweepMode = false;
+    allOff = false;
+    startFreakout(seconds);
+    forwardToPeers(path.c_str());
+    server.send(200, "application/json", "{\"mode\":\"freakout\"}\n");
+}
+
+static void handleCalm() {
+    if (relayedToBoard("/calm")) return;
+    freakoutUntil = 0;
+    sweepMode = false;
+    comaMode = false;
+    allOff = false;
+    logMsg("calmed by request");
+    forwardToPeers("/calm");
+    server.send(200, "application/json", "{\"mode\":\"flicker\"}\n");
+}
+
+static void handleOff() {
+    if (relayedToBoard("/off")) return;
+    allOff = true;
+    freakoutUntil = 0;
+    sweepMode = false;
+    logMsg("all pins extinguished");
+    forwardToPeers("/off");
+    server.send(200, "application/json", "{\"mode\":\"off\"}\n");
+}
+
+static void handleComa() {
+    if (relayedToBoard("/coma")) return;
+    comaMode = true;
+    sweepMode = false;
+    freakoutUntil = 0;
+    allOff = false;
+    logMsg("coma — barely alive");
+    forwardToPeers("/coma");
+    server.send(200, "application/json", "{\"mode\":\"coma\"}\n");
+}
+
+static void handleSweep() {
+    if (relayedToBoard("/sweep")) return;
+    sweepMode = true;
+    freakoutUntil = 0;
+    allOff = false;
+    logMsg("calibration sweep on");
+    forwardToPeers("/sweep");
+    server.send(200, "application/json", "{\"mode\":\"sweep\"}\n");
+}
+
+// Phone/browser control panel with live log, served at /.
+static const char PANEL_HTML[] PROGMEM = R"html(<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Frankenstein Meters</title>
+<link href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#e4d5b3;--dim:#9d8b66;--edge:#4a3a26;--edge2:#2b2115;
+--green:#3e5238;--red:#6e2a2e;--blue:#394663;--amber:#6e5629}
+*{box-sizing:border-box}
+body{margin:0;padding:1.2rem 1rem;color:var(--ink);
+background:#0c0906 radial-gradient(ellipse 120% 80% at 50% -10%,#241a10 0%,#120d08 55%,#0c0906 100%) no-repeat;
+min-height:100vh;font-family:'IM Fell English',Georgia,serif}
+.wrap{max-width:26rem;margin:0 auto}
+.masthead{text-align:center;margin-bottom:1.1rem}
+h1{font-family:'IM Fell English SC',Georgia,serif;font-weight:400;font-size:2.1rem;
+letter-spacing:.1em;margin:0;text-shadow:0 0 22px rgba(228,190,110,.22)}
+.sub{font-style:italic;color:var(--dim);font-size:.95rem;margin:.1rem 0 .6rem}
+#pill{display:inline-block;font-variant:small-caps;letter-spacing:.14em;font-size:.95rem;
+padding:.2rem 1.1rem;border:1px solid var(--edge);border-radius:2px;color:#f0e6cc;
+background:#333;box-shadow:inset 0 0 12px rgba(0,0,0,.55);transition:background .4s}
+.orn{text-align:center;color:#6b5837;font-size:1.15rem;margin:.75rem 0;user-select:none}
+.card{background:linear-gradient(#17120d,#110d09);border:3px double var(--edge);
+border-radius:3px;padding:1rem 1.1rem;box-shadow:0 2px 26px rgba(0,0,0,.65),inset 0 0 46px rgba(0,0,0,.45)}
+label{display:block;text-align:center;font-variant:small-caps;letter-spacing:.28em;
+color:var(--dim);font-size:.85rem;margin-bottom:.55rem}
+select{width:100%;font-family:inherit;font-size:1rem;padding:.55rem .7rem;border-radius:2px;
+border:1px solid var(--edge);background:#14100b;color:var(--ink);cursor:pointer}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:.65rem;margin-top:.85rem}
+button{font-family:inherit;font-variant:small-caps;font-size:1.1rem;letter-spacing:.08em;
+display:flex;flex-direction:column;align-items:center;gap:.1rem;
+padding:.7rem .4rem;border-radius:2px;color:var(--ink);cursor:pointer;user-select:none;
+background:#161009;border:1px solid var(--edge);outline:1px solid var(--edge2);outline-offset:-5px;
+transition:transform .06s,filter .15s,box-shadow .2s}
+button small{font-variant:normal;text-transform:uppercase;letter-spacing:.22em;
+font-size:.58rem;color:var(--dim)}
+button:hover{filter:brightness(1.25);box-shadow:0 0 16px rgba(222,170,80,.18)}
+button:active{transform:translateY(2px)}
+.b-freak{color:#d69090;border-color:#6e2a2e}
+.b-calm{color:#a9bf99;border-color:#3e5238}
+.b-coma{color:#9daccf;border-color:#394663}
+.b-sweep{color:#d3b075;border-color:#6e5629}
+.b-off{grid-column:1/-1;color:#8f8f8f;border-color:#3c3c3c}
+.b-off.lit{color:#ffd98a;border-color:#6e5629}
+button.on{box-shadow:inset 0 0 18px rgba(0,0,0,.7),0 0 14px currentColor;filter:brightness(1.2)}
+.chan{padding:.5rem 0;border-bottom:1px solid var(--edge2)}
+.chan:last-child{border-bottom:0}
+.mrow{display:flex;align-items:center;justify-content:space-between}
+.pbar{display:flex;height:15px;border:1px solid var(--edge2);border-radius:2px;
+overflow:hidden;cursor:pointer;margin-top:.45rem;background:#0d0a07}
+.pbar .on{background:#c9a44a}.pbar .off{background:#241c12}
+#edmodal{position:fixed;inset:0;background:rgba(5,4,2,.85);display:flex;
+align-items:center;justify-content:center;z-index:9;padding:1rem}
+#edmodal[hidden]{display:none}
+.edcard{background:linear-gradient(#17120d,#110d09);border:3px double var(--edge);
+border-radius:3px;padding:1rem 1.1rem;width:100%;max-width:24rem;max-height:90vh;overflow-y:auto}
+.erow{display:flex;align-items:center;gap:.5rem;margin:.35rem 0}
+.erow span{width:2.4rem;font-size:.78rem;letter-spacing:.1em;color:var(--dim)}
+.erow input[type=range]{flex:1;accent-color:#c9a44a}
+.erow b{width:3.6rem;text-align:right;font-size:.78rem;font-weight:400}
+.erow button{flex:none;display:inline;padding:.1rem .5rem;font-size:.8rem;outline:none}
+#plamp{width:18px;height:18px;border-radius:50%;background:#241c12;
+border:1px solid var(--edge);margin:.6rem auto .2rem;transition:background .05s}
+#plamp.lit{background:#ffd257;box-shadow:0 0 14px #ffd257}
+.ebtns{display:flex;gap:.5rem;margin-top:.6rem}
+.ebtns button{flex:1;padding:.55rem;font-size:.9rem;outline:none}
+#edtext{width:100%;font:.8rem Menlo,monospace;padding:.4rem .5rem;margin-top:.5rem;
+border-radius:2px;border:1px solid var(--edge2);background:#0d0a07;color:var(--ink);box-sizing:border-box}
+.mname{font-variant:small-caps;letter-spacing:.12em;font-size:1.05rem}
+.mpin{color:var(--dim);font-size:.75rem;font-style:italic;margin-left:.35rem}
+.mrow select{width:9.5rem}
+pre{background:#0a0805;border:1px solid var(--edge2);border-radius:2px;color:#a8b3a0;
+text-align:left;padding:.8rem;margin:0;min-height:6rem;max-height:11rem;overflow:auto;
+font:.72rem/1.6 Menlo,Consolas,monospace;white-space:pre-wrap}
+footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:1rem 0 .3rem}
+.cols{display:block}
+@media(min-width:880px){
+.wrap{max-width:58rem}
+.cols{display:grid;grid-template-columns:26rem 1fr;gap:1.4rem;align-items:start}
+.colR{position:sticky;top:1rem}
+.colR pre{max-height:calc(100vh - 13rem);min-height:22rem}
+.orn.mobile{display:none}}
+</style></head><body><div class="wrap">
+<div class="masthead"><h1>Frankenstein</h1>
+<div class="sub">&mdash; or, the Modern Prometheus &mdash;</div>
+<span id="pill">&hellip;</span></div>
+<div class="cols"><div class="colL">
+<div class="card">
+<label>The Experiment</label>
+<select id="tgt" onchange="refresh()">
+<option value="all" selected>The whole laboratory</option>
+<option value="1">Board the First &mdash; meters (.201)</option>
+<option value="2">Board the Second (.202)</option>
+</select>
+<div class="grid">
+<button class="b-freak" data-m="freakout" onclick="hit('/freakout')">&#9889; Galvanize<small>freak out</small></button>
+<button class="b-calm" data-m="flicker" onclick="hit('/calm')">Calm<small>steady flicker</small></button>
+<button class="b-coma" data-m="coma" onclick="hit('/coma')">&#9790; Coma<small>barely alive</small></button>
+<button class="b-sweep" data-m="sweep" onclick="hit('/sweep')">Calibrate<small>slow sweep</small></button>
+<button class="b-off" data-m="off" id="offbtn" onclick="toggleOff()">&#9760; Extinguish All<small>kill every pin</small></button>
+</div></div>
+<div class="orn">&#10087;</div>
+<div class="card"><label id="instlabel">The Instruments</label><div id="meters"></div></div>
+<div class="orn mobile">&#10087;</div>
+</div><div class="colR">
+<div class="card"><label id="jlabel">The Journal</label><pre id="log"></pre></div>
+</div></div>
+<footer>&ldquo;It was on a dreary night of November&hellip;&rdquo;</footer>
+</div>
+<div id="edmodal" hidden><div class="edcard">
+<label id="edtitle">Rhythm Editor</label>
+<div id="edbar" class="pbar" style="cursor:default"></div>
+<div id="plamp"></div>
+<div id="edrows"></div>
+<div class="ebtns"><button onclick="edAdd()">+ Add Step</button></div>
+<input id="edtext" onchange="edFromText()">
+<div class="ebtns">
+<button class="b-calm" onclick="edApply()">Apply</button>
+<button onclick="edClose()">Cancel</button>
+</div></div></div>
+<script>
+const OVRS=['follow','flicker','freakout','coma','off'];
+const LPATS=['dark','steady','doubleblink','breathe','candle','strobe','random','custom'];
+const COLORS={flicker:'var(--green)',freakout:'var(--red)',coma:'var(--blue)',sweep:'var(--amber)',off:'#3a3a3a'};
+let curMode='',curBase='',shownKey='x';
+async function hit(p){
+ const t=document.getElementById('tgt').value;
+ const sep=p.includes('?')?'&':'?';
+ try{await fetch(p+sep+(t==='all'?'all=1':'board='+t))}catch(e){}
+ refresh()}
+function toggleOff(){hit(curMode==='off'?'/calm':'/off')}
+async function setM(n,v){try{await fetch(curBase+'/set?meter='+n+'&mode='+v)}catch(e){};refresh()}
+let metersCache=[];
+function barHTML(str){
+ const st=(str||'').split(',').map(Number).filter(v=>v>0);
+ if(!st.length)return'';
+ const tot=st.reduce((a,b)=>a+b,0);
+ return st.map((v,j)=>'<div class="'+(j%2?'off':'on')+'" style="width:'+(v/tot*100)+'%"></div>').join('');
+}
+function renderMeters(ms,key){
+ metersCache=ms;
+ const box=document.getElementById('meters');
+ if(shownKey!==key||box.children.length!==ms.length){
+  shownKey=key;
+  box.innerHTML='';
+  ms.forEach((m,i)=>{
+   const opts=m.type==='light'?LPATS:OVRS;
+   const d=document.createElement('div');d.className='chan';
+   let h='<div class="mrow"><span class="mname">'+(m.type==='light'?'&#128367; ':'')+m.name.toUpperCase()+
+    '<span class="mpin">pin '+m.pin+'</span></span>'+
+    '<select onchange="setM('+(i+1)+',this.value)">'+
+    opts.map(o=>'<option'+(o===m.mode?' selected':'')+'>'+o+'</option>').join('')+'</select></div>';
+   if(m.type==='light')
+    h+='<div class="pbar" id="pb'+i+'" title="tap to edit rhythm" onclick="edOpen('+i+')">'+barHTML(m.steps)+'</div>';
+   d.innerHTML=h;
+   box.appendChild(d);});
+ }else{
+  ms.forEach((m,i)=>{
+   const s=box.children[i].querySelector('select');
+   if(document.activeElement!==s)s.value=m.mode;
+   const pb=document.getElementById('pb'+i);
+   if(pb&&edIdx<0)pb.innerHTML=barHTML(m.steps);});
+ }}
+
+// ---- visual rhythm editor ----
+let edIdx=-1,edSteps=[],pTimer=null,pPos=0;
+function edOpen(i){
+ edIdx=i;
+ edSteps=(metersCache[i].steps||'200,150,200,600').split(',').map(Number).filter(v=>v>0);
+ document.getElementById('edtitle').textContent='Rhythm — '+metersCache[i].name.toUpperCase();
+ document.getElementById('edmodal').hidden=false;
+ edDraw();pStart();}
+function edDraw(){
+ const tot=edSteps.reduce((a,b)=>a+b,0);
+ document.getElementById('edbar').innerHTML=edSteps.map((v,j)=>
+  '<div class="'+(j%2?'off':'on')+'" style="width:'+(v/tot*100)+'%"></div>').join('');
+ document.getElementById('edrows').innerHTML=edSteps.map((v,j)=>
+  '<div class="erow"><span>'+(j%2?'OFF':'ON')+'</span>'+
+  '<input type="range" min="20" max="2000" step="10" value="'+Math.min(v,2000)+'" oninput="edVal('+j+',this.value)">'+
+  '<b id="ev'+j+'">'+v+'ms</b>'+
+  '<button onclick="edDel('+j+')">&#10005;</button></div>').join('');
+ document.getElementById('edtext').value=edSteps.join(',');}
+function edVal(j,v){edSteps[j]=+v;document.getElementById('ev'+j).textContent=v+'ms';
+ document.getElementById('edtext').value=edSteps.join(',');
+ const tot=edSteps.reduce((a,b)=>a+b,0);
+ document.getElementById('edbar').innerHTML=edSteps.map((s,k)=>
+  '<div class="'+(k%2?'off':'on')+'" style="width:'+(s/tot*100)+'%"></div>').join('');
+ pRestart();}
+function edDel(j){if(edSteps.length>1){edSteps.splice(j,1);edDraw();pRestart();}}
+function edAdd(){if(edSteps.length<16){edSteps.push(200);edDraw();pRestart();}}
+function edFromText(){
+ const st=document.getElementById('edtext').value.split(',').map(Number).filter(v=>v>=20&&v<=20000);
+ if(st.length){edSteps=st.slice(0,16);edDraw();pRestart();}}
+function pStart(){pPos=0;pTick();}
+function pTick(){
+ const lamp=document.getElementById('plamp');
+ lamp.classList.toggle('lit',pPos%2===0);
+ pTimer=setTimeout(()=>{pPos=(pPos+1)%edSteps.length;pTick()},edSteps[pPos]);}
+function pRestart(){clearTimeout(pTimer);pStart();}
+function edClose(){clearTimeout(pTimer);document.getElementById('edmodal').hidden=true;edIdx=-1;}
+async function edApply(){
+ const n=edIdx+1;
+ try{await fetch(curBase+'/pattern?meter='+n+'&steps='+encodeURIComponent(edSteps.join(',')))}catch(e){}
+ edClose();refresh();}
+async function refresh(){try{
+ const s=await (await fetch('/status')).json();
+ curMode=s.mode;
+ const pill=document.getElementById('pill');
+ pill.textContent='BOARD '+s.board+' · '+s.mode;
+ pill.style.background=COLORS[s.mode]||'#333';
+ document.querySelectorAll('.grid button').forEach(b=>
+  b.classList.toggle('on',b.dataset.m===s.mode));
+ const ob=document.getElementById('offbtn');
+ ob.classList.toggle('lit',s.mode==='off');
+ ob.innerHTML=s.mode==='off'
+  ?'&#128293; Rekindle<small>restore the laboratory</small>'
+  :'&#9760; Extinguish All<small>kill every pin</small>';
+ // The Instruments card follows the target dropdown: picking another board
+ // shows THAT board's channels and sends changes to it.
+ const t=document.getElementById('tgt').value;
+ curBase=(t==='all'||+t===s.board)?'':'http://192.168.71.20'+t;
+ let ms=s.meters,mb=s.board;
+ if(curBase){try{const ts=await (await fetch(curBase+'/status')).json();
+  ms=ts.meters;mb=ts.board}catch(e){ms=[];mb=t+' (unreachable)'}}
+ document.getElementById('instlabel').textContent='The Instruments — Board '+mb;
+ renderMeters(ms,curBase);
+ document.getElementById('jlabel').textContent='The Journal — Board '+mb;
+ const log=document.getElementById('log');
+ try{log.textContent=await (await fetch(curBase+'/log')).text();
+ }catch(e){log.textContent='(board unreachable)'}
+ log.scrollTop=log.scrollHeight;
+}catch(e){const p=document.getElementById('pill');p.textContent='OFFLINE';p.style.background='#555'}}
+refresh();setInterval(refresh,2000);
+</script></body></html>)html";
+
+static void handlePanel() {
+    server.send_P(200, "text/html", PANEL_HTML);
+}
+
+static void connectWiFi() {
+    WiFi.mode(WIFI_STA);
+    WiFi.setHostname(WIFI_HOSTNAME);
+#ifdef USE_STATIC_IP
+    WiFi.config(IPAddress(STATIC_IP), IPAddress(STATIC_GATEWAY),
+                IPAddress(STATIC_SUBNET), IPAddress(STATIC_GATEWAY));
+#endif
+
+    // List every 2.4 GHz network in range — the definitive word on what SSID
+    // the ESP32 can actually see and how strong it is.
+    int n = WiFi.scanNetworks();
+    Serial.printf("visible 2.4GHz networks (%d):\n", n);
+    for (int i = 0; i < n; i++) {
+        Serial.printf("  \"%s\"  ch%d  %ddBm\n", WiFi.SSID(i).c_str(),
+                      WiFi.channel(i), WiFi.RSSI(i));
+    }
+    WiFi.scanDelete();
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.printf("connecting to WiFi \"%s\"", WIFI_SSID);
+    uint32_t start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+        delay(250);
+        Serial.print(".");
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println();
+        logMsg("connected: http://" + WiFi.localIP().toString() +
+               "/ (or http://" WIFI_HOSTNAME ".local/)");
+        if (MDNS.begin(WIFI_HOSTNAME)) MDNS.addService("http", "tcp", 80);
+    } else {
+        Serial.println();
+        logMsg("WiFi failed — flicker runs anyway; will keep retrying");
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    prefs.begin("franken");
+    for (int i = 0; i < METER_COUNT; i++) {
+        meters[i].begin(METERS[i], i);
+        // Default rhythm: on-on-off. Overridden by anything saved in flash.
+        customSteps[i][0] = 200; customSteps[i][1] = 150;
+        customSteps[i][2] = 200; customSteps[i][3] = 600;
+        customLen[i] = 4;
+        uint8_t lp = prefs.getUChar((String("lp") + i).c_str(), (uint8_t)METERS[i].defPattern);
+        lightPatterns[i] = lp < LP_COUNT ? (LightPattern)lp : METERS[i].defPattern;
+        String saved = prefs.getString((String("cs") + i).c_str(), "");
+        if (saved.length()) parseSteps(saved, i);
+    }
+    Serial.printf("Frankenstein Meters: flickering %d meter(s)\n", METER_COUNT);
+
+    connectWiFi();
+    // Lets the dashboard on one board read and set another board's channels.
+    server.enableCORS(true);
+    server.on("/", handlePanel);
+    server.on("/set", handleSet);
+    server.on("/pattern", handlePattern);
+    server.on("/status", handleStatus);
+    server.on("/log", handleLog);
+    server.on("/freakout", handleFreakout);
+    server.on("/coma", handleComa);
+    server.on("/sweep", handleSweep);
+    server.on("/calm", handleCalm);
+    server.on("/off", handleOff);
+#ifdef TRYME_PIN
+    pinMode(TRYME_PIN, OUTPUT);
+    digitalWrite(TRYME_PIN, LOW);
+    // Manual test: /tryme pulses the prop trigger without a freakout.
+    server.on("/tryme", []() {
+        pulseTryme();
+        server.send(200, "application/json", "{\"ok\":true}\n");
+    });
+#endif
+    server.begin();
+}
+
+void loop() {
+    server.handleClient();
+
+#ifdef TRYME_PIN
+    if (trymeOffAt && (int32_t)(millis() - trymeOffAt) >= 0) {
+        digitalWrite(TRYME_PIN, LOW);
+        trymeOffAt = 0;
+    }
+#endif
+
+    // Reconnect WiFi if it drops (router reboot, etc.).
+    static uint32_t lastWiFiCheck = 0;
+    if (WiFi.status() != WL_CONNECTED && millis() - lastWiFiCheck > 30000) {
+        lastWiFiCheck = millis();
+        WiFi.disconnect();
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    }
+
+    // Serial triggers for testing without the network.
+    if (Serial.available()) {
+        char ch = Serial.read();
+        if (ch == 'f') { sweepMode = false; startFreakout(FREAKOUT_DEFAULT_S); }
+        if (ch == 's') { sweepMode = true; freakoutUntil = 0; }
+        if (ch == 'z') { comaMode = true; sweepMode = false; freakoutUntil = 0; }
+        if (ch == 'c') { freakoutUntil = 0; sweepMode = false; comaMode = false; }
+    }
+
+    uint32_t now = millis();
+    if (now - lastTick >= TICK_MS) {
+        lastTick = now;
+        if (allOff) {
+            // Kill switch: everything eases to dark/zero.
+            for (int i = 0; i < METER_COUNT; i++) {
+                if (METERS[i].style == STYLE_LIGHT) meters[i].tickLight(LP_DARK, false, false, nullptr, 0);
+                else meters[i].tickOff();
+            }
+        } else if (sweepMode) {
+            // Slow 0-100-0% triangle, 8 s per cycle, for resistor calibration.
+            float phase = (now % 8000) / 8000.0f;
+            float frac = phase < 0.5f ? phase * 2.0f : 2.0f - phase * 2.0f;
+            for (int i = 0; i < METER_COUNT; i++) {
+                meters[i].writeDuty(frac);
+            }
+            static uint32_t lastPrint = 0;
+            if (now - lastPrint >= 500) {
+                lastPrint = now;
+                Serial.printf("sweep: %3.0f%%\n", frac * 100.0f);
+            }
+        } else {
+            bool boardFreak = freakingOut();
+            for (int i = 0; i < METER_COUNT; i++) {
+                if (METERS[i].style == STYLE_LIGHT) {
+                    // Lights show their pattern; panic always strobes them.
+                    meters[i].tickLight(lightPatterns[i], boardFreak, comaMode,
+                                        customSteps[i], customLen[i]);
+                    continue;
+                }
+                switch (overrides[i]) {
+                    case OVR_FOLLOW:   meters[i].tick(boardFreak, comaMode); break;
+                    case OVR_FLICKER:  meters[i].tick(false, false); break;
+                    case OVR_FREAKOUT: meters[i].tick(true, false); break;
+                    case OVR_COMA:     meters[i].tick(false, true); break;
+                    case OVR_OFF:      meters[i].tickOff(); break;
+                }
+            }
+        }
+    }
+}
