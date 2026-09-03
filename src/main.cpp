@@ -797,7 +797,8 @@ border:1px solid var(--edge);margin:.6rem auto .2rem;transition:background .05s}
 #edtext{width:100%;font:.8rem Menlo,monospace;padding:.4rem .5rem;margin-top:.5rem;
 border-radius:2px;border:1px solid var(--edge2);background:#0d0a07;color:var(--ink);box-sizing:border-box}
 .mname{font-variant:small-caps;letter-spacing:.12em;font-size:1.05rem}
-.mpin{color:var(--dim);font-size:.75rem;font-style:italic;margin-left:.35rem}
+.mpin{color:var(--dim);font:.68rem Menlo,Consolas,monospace;font-style:normal;
+margin-left:.4rem;letter-spacing:.03em}
 .mrow select{width:9.5rem}
 pre{background:#0a0805;border:1px solid var(--edge2);border-radius:2px;color:#a8b3a0;
 text-align:left;padding:.8rem;margin:0;min-height:6rem;max-height:11rem;overflow:auto;
