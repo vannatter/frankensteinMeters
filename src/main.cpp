@@ -1087,8 +1087,11 @@ function barHTMLG(str){
 function renderMeters(ms,key){
  metersCache=ms;
  const box=document.getElementById('meters');
- if(shownKey!==key||box.children.length!==ms.length){
-  shownKey=key;
+ // Rebuild whenever names/pins/types change, not just row count — a pin
+ // remap in firmware must refresh the labels.
+ const sig=key+'|'+ms.map(m=>m.name+':'+m.pin+':'+m.type).join(',');
+ if(shownKey!==sig){
+  shownKey=sig;
   box.innerHTML='';
   ms.forEach((m,i)=>{
    const opts=m.type==='light'?LPATS:OVRS;
