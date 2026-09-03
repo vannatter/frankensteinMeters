@@ -304,6 +304,10 @@ static const char* LP_NAMES[] = {"dark", "steady", "doubleblink", "breathe",
 static const int LP_COUNT = 8;
 static LightPattern lightPatterns[METER_COUNT] = {};
 
+// Channel names: defaults from the config table, renameable live from the
+// dashboard (persisted in flash).
+static String chanNames[METER_COUNT];
+
 // Custom blink rhythms: on/off durations in ms, alternating, starting with
 // ON. Edited live from the dashboard, persisted in flash.
 #define MAX_STEPS 16
@@ -425,7 +429,7 @@ static void handleStatus() {
         bool isLight = METERS[i].style == STYLE_LIGHT;
         if (i) body += ",";
         body += "{\"name\":\"";
-        body += METERS[i].name;
+        body += chanNames[i];
         body += "\",\"pin\":";
         body += METERS[i].pin;
         body += ",\"type\":\"";
@@ -450,7 +454,7 @@ static void handleSet() {
     String mode = server.arg("mode");
     int idx = -1;
     for (int i = 0; i < METER_COUNT; i++) {
-        if (m == METERS[i].name || m.toInt() == i + 1) { idx = i; break; }
+        if (m == chanNames[i] || m == METERS[i].name || m.toInt() == i + 1) { idx = i; break; }
     }
     if (idx < 0) {
         server.send(400, "application/json", "{\"error\":\"bad meter\"}\n");
@@ -461,7 +465,7 @@ static void handleSet() {
             if (mode == LP_NAMES[i]) {
                 lightPatterns[idx] = (LightPattern)i;
                 savePatternPrefs(idx);
-                logMsg(String(METERS[idx].name) + " → " + mode);
+                logMsg(chanNames[idx] + " → " + mode);
                 server.send(200, "application/json", "{\"ok\":true}\n");
                 return;
             }
@@ -470,7 +474,7 @@ static void handleSet() {
         for (unsigned i = 0; i < sizeof(OVR_NAMES) / sizeof(char*); i++) {
             if (mode == OVR_NAMES[i]) {
                 overrides[idx] = (MeterOverride)i;
-                logMsg(String(METERS[idx].name) + " → " + mode);
+                logMsg(chanNames[idx] + " → " + mode);
                 server.send(200, "application/json", "{\"ok\":true}\n");
                 return;
             }
@@ -486,7 +490,7 @@ static void handlePattern() {
     String m = server.arg("meter");
     int idx = -1;
     for (int i = 0; i < METER_COUNT; i++) {
-        if (m == METERS[i].name || m.toInt() == i + 1) { idx = i; break; }
+        if (m == chanNames[i] || m == METERS[i].name || m.toInt() == i + 1) { idx = i; break; }
     }
     if (idx < 0 || METERS[idx].style != STYLE_LIGHT) {
         server.send(400, "application/json", "{\"error\":\"not a light\"}\n");
@@ -499,7 +503,31 @@ static void handlePattern() {
     }
     lightPatterns[idx] = LP_CUSTOM;
     savePatternPrefs(idx);
-    logMsg(String(METERS[idx].name) + " custom: " + stepsToString(idx));
+    logMsg(chanNames[idx] + " custom: " + stepsToString(idx));
+    server.send(200, "application/json", "{\"ok\":true}\n");
+}
+
+// /rename?meter=<1-N or name>&name=<newname> — rename a channel slot live.
+// Persisted in flash; the config-table name remains the reset default.
+static void handleRename() {
+    String m = server.arg("meter");
+    int idx = -1;
+    for (int i = 0; i < METER_COUNT; i++) {
+        if (m == chanNames[i] || m == METERS[i].name || m.toInt() == i + 1) { idx = i; break; }
+    }
+    String name = server.arg("name");
+    String clean;
+    for (unsigned i = 0; i < name.length() && clean.length() < 14; i++) {
+        char c = name[i];
+        if (isalnum(c) || c == '-' || c == '_') clean += c;
+    }
+    if (idx < 0 || clean.length() == 0) {
+        server.send(400, "application/json", "{\"error\":\"bad meter or name\"}\n");
+        return;
+    }
+    logMsg(chanNames[idx] + " renamed to " + clean);
+    chanNames[idx] = clean;
+    prefs.putString((String("nm") + idx).c_str(), clean);
     server.send(200, "application/json", "{\"ok\":true}\n");
 }
 
@@ -700,6 +728,12 @@ async function hit(p){
  refresh()}
 function toggleOff(){hit(curMode==='off'?'/calm':'/off')}
 async function setM(n,v){try{await fetch(curBase+'/set?meter='+n+'&mode='+v)}catch(e){};refresh()}
+async function renameM(n,i){
+ const cur=metersCache[i]?metersCache[i].name:'';
+ const v=prompt('Rename channel (letters/numbers/dashes, max 14):',cur);
+ if(!v||v===cur)return;
+ try{await fetch(curBase+'/rename?meter='+n+'&name='+encodeURIComponent(v))}catch(e){}
+ shownKey='x';refresh()}
 let metersCache=[];
 function barHTML(str){
  const st=(str||'').split(',').map(Number).filter(v=>v>0);
@@ -716,7 +750,8 @@ function renderMeters(ms,key){
   ms.forEach((m,i)=>{
    const opts=m.type==='light'?LPATS:OVRS;
    const d=document.createElement('div');d.className='chan';
-   let h='<div class="mrow"><span class="mname">'+(m.type==='light'?'&#128367; ':'')+m.name.toUpperCase()+
+   let h='<div class="mrow"><span class="mname" id="nm'+i+'" title="tap to rename" '+
+    'style="cursor:pointer" onclick="renameM('+(i+1)+','+i+')">'+(m.type==='light'?'&#128367; ':'')+m.name.toUpperCase()+
     '<span class="mpin">pin '+m.pin+'</span></span>'+
     '<select onchange="setM('+(i+1)+',this.value)">'+
     opts.map(o=>'<option'+(o===m.mode?' selected':'')+'>'+o+'</option>').join('')+'</select></div>';
@@ -855,6 +890,7 @@ void setup() {
         lightPatterns[i] = lp < LP_COUNT ? (LightPattern)lp : METERS[i].defPattern;
         String saved = prefs.getString((String("cs") + i).c_str(), "");
         if (saved.length()) parseSteps(saved, i);
+        chanNames[i] = prefs.getString((String("nm") + i).c_str(), METERS[i].name);
     }
     Serial.printf("Frankenstein Meters: flickering %d meter(s)\n", METER_COUNT);
 
@@ -864,6 +900,7 @@ void setup() {
     server.on("/", handlePanel);
     server.on("/set", handleSet);
     server.on("/pattern", handlePattern);
+    server.on("/rename", handleRename);
     server.on("/status", handleStatus);
     server.on("/log", handleLog);
     server.on("/freakout", handleFreakout);

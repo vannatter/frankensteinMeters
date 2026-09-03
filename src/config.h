@@ -4,9 +4,16 @@
 // Frankenstein Meters — configuration
 // ---------------------------------------------------------------------------
 
-// How many meters are connected (1..4). Meters use the first N rows of
-// METERS below.
+// Channels per board. Board 1 carries the full 7-meter map; board 2 is the
+// 4-channel lighting board.
+#ifndef BOARD_ID
+#define BOARD_ID 1
+#endif
+#if BOARD_ID == 1
+#define METER_COUNT 7
+#else
 #define METER_COUNT 4
+#endif
 
 // PWM settings. 5 kHz is far above the needle's mechanical response, so the
 // meter averages the duty cycle into a steady deflection.
@@ -64,7 +71,9 @@ struct MeterProfile {
 };
 
 #if BOARD_ID == 1
-static const MeterProfile METERS[4] = {
+// Names here are DEFAULTS — channels can be renamed live from the dashboard
+// (tap the name); renames persist in flash.
+static const MeterProfile METERS[METER_COUNT] = {
     // GPIO 25, big EICO: the star — calm slow wander, rare big surges.
     {"main", 25, PWM_MAX_DUTY, 0.15f, 0.35f, 0.70f, 1.00f, 6.0f, 18.0f, 0.02f, 0.06f, STYLE_FLICKER, LP_DARK},
     // GPIO 26: calmer, sits lower, rarer surges.
@@ -73,6 +82,10 @@ static const MeterProfile METERS[4] = {
     {"weston", 27, PWM_MAX_DUTY, 0.20f, 0.55f, 0.75f, 1.00f, 1.5f, 6.0f, 0.05f, 0.12f, STYLE_FLICKER, LP_DARK},
     // GPIO 33: the heartbeat monitor.
     {"heartbeat", 33, PWM_MAX_DUTY, 0.15f, 0.40f, 0.65f, 0.90f, 4.0f, 12.0f, 0.02f, 0.05f, STYLE_HEARTBEAT, LP_DARK},
+    // Slots 5-7 for the rest of the collection — generic until calibrated.
+    {"slot5", 21, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.03f, 0.08f, STYLE_FLICKER, LP_DARK},
+    {"slot6", 22, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.03f, 0.08f, STYLE_FLICKER, LP_DARK},
+    {"slot7", 23, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.03f, 0.08f, STYLE_FLICKER, LP_DARK},
 };
 #else
 // Board 2 is all lighting — no meters.
