@@ -61,18 +61,30 @@ public:
     }
 
     // Custom choreography: move to each position, hold for its duration, loop.
-    void tickSeq(const uint8_t* pos, const uint16_t* dur, uint8_t n) {
+    // Fuzzy mode plays the same sequence loosely — positions wander ±10%,
+    // hold times stretch/shrink, and the needle trembles — so the pattern
+    // reads as intent rather than a metronome.
+    void tickSeq(const uint8_t* pos, const uint16_t* dur, uint8_t n, bool fuzzy) {
         if (n == 0) { tickOff(); return; }
         uint32_t now = millis();
         if (stepIdx_ >= n) stepIdx_ = 0;
         if ((int32_t)(now - strobeFlipAt_) >= 0) {
             stepIdx_ = (uint8_t)((stepIdx_ + 1) % n);
-            strobeFlipAt_ = now + dur[stepIdx_];
+            if (fuzzy) {
+                strobeFlipAt_ = now + (uint32_t)(dur[stepIdx_] * frand(0.65f, 1.45f));
+                wanderTarget_ = constrain(pos[stepIdx_] / 100.0f + frand(-0.10f, 0.10f), 0.0f, 1.0f);
+            } else {
+                strobeFlipAt_ = now + dur[stepIdx_];
+                wanderTarget_ = pos[stepIdx_] / 100.0f;
+            }
         }
-        float target = pos[stepIdx_] / 100.0f;
+        float target = wanderTarget_ + (fuzzy ? frand(-0.012f, 0.012f) : 0.0f);
         position_ += (target - position_) * min(speed_ * 3.0f, 0.5f);
         writeDuty(position_);
     }
+
+    // The heartbeat as a preset any gauge can run.
+    void tickBeat() { tickHeartbeat(millis(), false, false); }
 
     // Pegged: pinned near the top, trembling like it's overloaded.
     void tickPegged() {
@@ -336,9 +348,11 @@ static bool comaMode = false;
 // Per-meter override: FOLLOW obeys the board mode; the rest pin that one
 // meter to a specific behavior regardless of what the lab is doing.
 enum MeterOverride { OVR_FOLLOW, OVR_FLICKER, OVR_FREAKOUT, OVR_COMA, OVR_OFF,
-                     OVR_CUSTOM, OVR_PEGGED, OVR_SCAN, OVR_SPUTTER };
+                     OVR_CUSTOM, OVR_FUZZY, OVR_HEARTBEAT,
+                     OVR_PEGGED, OVR_SCAN, OVR_SPUTTER };
 static const char* OVR_NAMES[] = {"follow", "flicker", "freakout", "coma", "off",
-                                  "custom", "pegged", "scan", "sputter"};
+                                  "custom", "fuzzy", "heartbeat",
+                                  "pegged", "scan", "sputter"};
 static MeterOverride overrides[METER_COUNT] = {};
 
 // Current pattern of each STYLE_LIGHT channel (dashboard-selectable).
@@ -609,7 +623,8 @@ static void handleMPattern() {
                     "{\"error\":\"steps must be 1-16 pos:ms pairs (pos 0-100, ms 20-20000)\"}\n");
         return;
     }
-    overrides[idx] = OVR_CUSTOM;
+    // Keep fuzzy playback if that's what the channel was set to.
+    if (overrides[idx] != OVR_FUZZY) overrides[idx] = OVR_CUSTOM;
     prefs.putString((String("mq") + idx).c_str(), seqToString(idx));
     logMsg(chanNames[idx] + " choreography: " + seqToString(idx));
     server.send(200, "application/json", "{\"ok\":true}\n");
@@ -837,7 +852,7 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <button onclick="edClose()">Cancel</button>
 </div></div></div>
 <script>
-const OVRS=['follow','flicker','freakout','coma','off','custom','pegged','scan','sputter'];
+const OVRS=['follow','flicker','freakout','coma','off','custom','fuzzy','heartbeat','pegged','scan','sputter'];
 const HERD=[[1,201],[2,202]];
 async function herdCheck(){
  const rows=await Promise.all(HERD.map(async([n,o])=>{
@@ -1167,7 +1182,9 @@ void loop() {
                     case OVR_FREAKOUT: meters[i].tick(true, false); break;
                     case OVR_COMA:     meters[i].tick(false, true); break;
                     case OVR_OFF:      meters[i].tickOff(); break;
-                    case OVR_CUSTOM:   meters[i].tickSeq(seqPos[i], seqDur[i], seqLen[i]); break;
+                    case OVR_CUSTOM:   meters[i].tickSeq(seqPos[i], seqDur[i], seqLen[i], false); break;
+                    case OVR_FUZZY:    meters[i].tickSeq(seqPos[i], seqDur[i], seqLen[i], true); break;
+                    case OVR_HEARTBEAT: meters[i].tickBeat(); break;
                     case OVR_PEGGED:   meters[i].tickPegged(); break;
                     case OVR_SCAN:     meters[i].tickScan(); break;
                     case OVR_SPUTTER:  meters[i].tickSputter(); break;
