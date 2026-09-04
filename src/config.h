@@ -12,7 +12,7 @@
 #if BOARD_ID == 1
 #define METER_COUNT 7
 #else
-#define METER_COUNT 4
+#define METER_COUNT 12
 #endif
 
 // PWM settings. 5 kHz is far above the needle's mechanical response, so the
@@ -99,15 +99,22 @@ static const MeterProfile METERS[METER_COUNT] = {
     {"slot7", 14, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.02f, 0.08f, STYLE_SCAN, LP_DARK},
 };
 #else
-// Board 2 is all lighting — no meters.
-// GPIO 26 verified healthy (2026-09-01) — the earlier "dead pin" verdict was
-// an artifact of the board-identity mixup. All of 25/26/27/33 work; 18 spare.
-static const MeterProfile METERS[4] = {
+// Board 2 is all lighting — 12 channels across two ULN2803s.
+// Chip #1: GPIOs 25,33,27,26 (IN1-4), try-me on 32 (IN5), 12,13,14 (IN6-8).
+// Chip #2: GPIOs 21,22,23,18,19 (IN1-5). Spare GPIOs: 4,5,16,17.
+static const MeterProfile METERS[METER_COUNT] = {
     {"light1", 25, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_CANDLE},
-    // GPIO 33: the proven-working pin — the main lamp lives here.
     {"light2", 33, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DOUBLE},
     {"light3", 27, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_BREATHE},
     {"light4", 26, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light5", 12, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light6", 13, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light7", 14, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light8", 21, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light9", 22, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light10", 23, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light11", 18, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light12", 19, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
 };
 #endif
 
