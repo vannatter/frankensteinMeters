@@ -242,7 +242,7 @@ public:
                 nextWanderAt_ = now + (uint32_t)(6200.0f * beatVary_);
             }
             float ph = (now - beatStart_) / (6200.0f * beatVary_);
-            target = 0.03f + 0.085f * (1.0f - cosf(2.0f * PI * ph)) + frand(-0.004f, 0.004f);
+            target = 0.06f + 0.145f * (1.0f - cosf(2.0f * PI * ph)) + frand(-0.004f, 0.004f);
             position_ += (target - position_) * 0.06f;
         } else if (coma && p_->style == STYLE_SPASTIC) {
             // Weak dying twitches near the bottom.
@@ -1047,7 +1047,7 @@ function gTarget(s,m,bm,t){
  if(m.style==='lung'&&m.mode==='follow'&&bm==='freakout'){
   const ph=(t%950)/950;return (0.15+0.375*(1-Math.cos(2*Math.PI*ph)))*100;}
  if(m.style==='lung'&&m.mode==='follow'&&bm==='coma'){
-  const ph=(t%6200)/6200;return (0.03+0.085*(1-Math.cos(2*Math.PI*ph)))*100;}
+  const ph=(t%6200)/6200;return (0.06+0.145*(1-Math.cos(2*Math.PI*ph)))*100;}
  if(m.style==='lung'&&m.mode==='follow'){
   const ph=(t%4400)/4400;return (0.10+0.375*(1-Math.cos(2*Math.PI*ph)))*100;}
  if(m.style==='spastic'&&m.mode==='follow'&&bm==='coma'){
