@@ -856,6 +856,11 @@ border-radius:2px;border:1px solid var(--edge2);background:#0d0a07;color:var(--i
 .mpin{color:var(--dim);font:.68rem Menlo,Consolas,monospace;font-style:normal;
 margin-left:.4rem;letter-spacing:.03em}
 .mrow select{width:9.5rem}
+.mctl{display:flex;align-items:center;gap:.45rem}
+.pwr{display:inline;flex:none;width:1.9rem;height:1.9rem;padding:0;line-height:1;
+font-size:.95rem;border-radius:50%;outline:none}
+.pwr.on3{color:#8fd18f;border-color:#3e5238}
+.pwr.off3{color:#555;border-color:#333}
 pre{background:#0a0805;border:1px solid var(--edge2);border-radius:2px;color:#a8b3a0;
 text-align:left;padding:.8rem;margin:0;min-height:6rem;max-height:11rem;overflow:auto;
 font:.72rem/1.6 Menlo,Consolas,monospace;white-space:pre-wrap}
@@ -1096,11 +1101,15 @@ function renderMeters(ms,key){
   ms.forEach((m,i)=>{
    const opts=m.type==='light'?LPATS:OVRS;
    const d=document.createElement('div');d.className='chan';
+   const isOff=(m.mode==='off'||m.mode==='dark');
    let h='<div class="mrow"><span class="mname" id="nm'+i+'" title="tap to rename" '+
     'style="cursor:pointer" onclick="renameM('+(i+1)+','+i+')">'+(m.type==='light'?'&#128367; ':'')+m.name.toUpperCase()+
     '<span class="mpin">pin '+m.pin+'</span></span>'+
+    '<span class="mctl">'+
+    '<button class="pwr '+(isOff?'off3':'on3')+'" id="pw'+i+'" title="toggle on/off" '+
+    'onclick="togM('+(i+1)+','+i+')">&#9211;</button>'+
     '<select onchange="setM('+(i+1)+',this.value)">'+
-    opts.map(o=>'<option'+(o===m.mode?' selected':'')+'>'+o+'</option>').join('')+'</select></div>';
+    opts.map(o=>'<option'+(o===m.mode?' selected':'')+'>'+o+'</option>').join('')+'</select></span></div>';
    h+='<div class="pbar" id="pb'+i+'" title="tap to edit" onclick="edOpen('+i+')">'+
     (m.type==='light'?barHTML(m.steps):barHTMLG(m.steps))+'</div>';
    d.innerHTML=h;
@@ -1109,9 +1118,25 @@ function renderMeters(ms,key){
   ms.forEach((m,i)=>{
    const s=box.children[i].querySelector('select');
    if(document.activeElement!==s)s.value=m.mode;
+   const pw=document.getElementById('pw'+i);
+   if(pw)pw.className='pwr '+((m.mode==='off'||m.mode==='dark')?'off3':'on3');
    const pb=document.getElementById('pb'+i);
    if(pb&&edIdx<0)pb.innerHTML=m.type==='light'?barHTML(m.steps):barHTMLG(m.steps);});
  }}
+// Power toggle: off/dark <-> whatever the channel was doing before.
+let prevMode={};
+async function togM(n,i){
+ const m=metersCache[i];
+ if(!m)return;
+ const offVal=m.type==='light'?'dark':'off';
+ let v;
+ if(m.mode===offVal){
+  v=prevMode[curBase+'|'+i]||(m.type==='light'?'steady':'follow');
+ }else{
+  prevMode[curBase+'|'+i]=m.mode;
+  v=offVal;
+ }
+ setM(n,v);}
 
 // ---- visual rhythm/choreography editor (lights + gauges) ----
 let edIdx=-1,edType='light',edSteps=[],pTimer=null,pPos=0;
