@@ -395,10 +395,16 @@ static uint32_t lastTick = 0;
 static String logLines[24];
 static int logHead = 0;
 
+// The journal is written from both cores (tick loop on core 1, HTTP
+// handlers on core 0), so guard it.
+static SemaphoreHandle_t logMux;
+
 static void logMsg(const String& msg) {
     Serial.println(msg);
+    if (logMux) xSemaphoreTake(logMux, portMAX_DELAY);
     logLines[logHead] = String(millis() / 1000) + "s  " + msg;
     logHead = (logHead + 1) % 24;
+    if (logMux) xSemaphoreGive(logMux);
 }
 
 // Freakout state: 0 = calm. Otherwise the millis() deadline, or UINT32_MAX
@@ -1413,10 +1419,20 @@ void setup() {
     });
 #endif
     server.begin();
+
+    // Serve HTTP on core 0 as a dedicated task — requests no longer take
+    // turns with the 100Hz animation loop (which owns core 1). Cures the
+    // dashboard's false "unreachable" stalls under load.
+    logMux = xSemaphoreCreateMutex();
+    xTaskCreatePinnedToCore([](void*) {
+        for (;;) {
+            server.handleClient();
+            vTaskDelay(1);
+        }
+    }, "http", 8192, nullptr, 1, nullptr, 0);
 }
 
 void loop() {
-    server.handleClient();
 
 #ifdef TRYME_PIN
     if (trymeOffAt && (int32_t)(millis() - trymeOffAt) >= 0) {
