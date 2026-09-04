@@ -523,6 +523,11 @@ static void savePatternPrefs(int idx) {
 // Kill switch: every pin dark/zero until rekindled.
 static bool allOff = false;
 
+// Identify mode: one channel blinks hard while all others go dark — for
+// tracing physical wiring. Auto-expires.
+static int identifyIdx = -1;
+static uint32_t identifyUntil = 0;
+
 // When nonzero, the Try-Me trigger output is high until this millis() time.
 static uint32_t trymeOffAt = 0;
 
@@ -585,6 +590,7 @@ static bool relayedToBoard(const String& path) {
 }
 
 static const char* currentModeName() {
+    if (identifyIdx >= 0) return "identify";
     if (allOff) return "off";
     if (sweepMode) return "sweep";
     if (freakingOut()) return "freakout";
@@ -597,7 +603,9 @@ static void handleStatus() {
     body += BOARD_ID;
     body += ",\"mode\":\"";
     body += currentModeName();
-    body += "\",\"meters\":[";
+    body += "\",\"ident\":";
+    body += identifyIdx + 1;
+    body += ",\"meters\":[";
     for (int i = 0; i < METER_COUNT; i++) {
         bool isLight = METERS[i].style == STYLE_LIGHT;
         if (i) body += ",";
@@ -709,6 +717,31 @@ static void handleMPattern() {
     server.send(200, "application/json", "{\"ok\":true}\n");
 }
 
+// /identify?meter=<1-N or name> — that channel blinks hard, all others go
+// dark, for tracing wiring. Same call again (or /calm) cancels; auto-expires
+// after 20s (override with ?seconds=N).
+static void handleIdentify() {
+    String m = server.arg("meter");
+    int idx = -1;
+    for (int i = 0; i < METER_COUNT; i++) {
+        if (m == chanNames[i] || m == METERS[i].name || m.toInt() == i + 1) { idx = i; break; }
+    }
+    if (idx < 0) {
+        server.send(400, "application/json", "{\"error\":\"bad meter\"}\n");
+        return;
+    }
+    if (identifyIdx == idx) {
+        identifyIdx = -1;
+        logMsg("identify off");
+    } else {
+        long seconds = server.hasArg("seconds") ? server.arg("seconds").toInt() : 20;
+        identifyIdx = idx;
+        identifyUntil = millis() + (uint32_t)seconds * 1000;
+        logMsg("IDENTIFY " + chanNames[idx] + " (pin " + METERS[idx].pin + ")");
+    }
+    server.send(200, "application/json", "{\"ok\":true}\n");
+}
+
 // /rename?meter=<1-N or name>&name=<newname> — rename a channel slot live.
 // Persisted in flash; the config-table name remains the reset default.
 static void handleRename() {
@@ -791,6 +824,7 @@ static void handleCalm() {
     sweepMode = false;
     comaMode = false;
     allOff = false;
+    identifyIdx = -1;
     logMsg("calmed by request");
     forwardToPeers("/calm");
     server.send(200, "application/json", "{\"mode\":\"flicker\"}\n");
@@ -977,7 +1011,7 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <script>
 const OVRS=['follow','flicker','freakout','coma','off','custom','fuzzy','heartbeat','pegged','scan','sputter'];
 let HERD=[],PREFIX='http://192.168.71.';
-let herdMeta={},herdMode={},herdSig='',herdFails={};
+let herdMeta={},herdMode={},herdIdent={},herdSig='',herdFails={};
 async function loadHerd(){
  try{
   const h=await (await fetch('/herd')).json();
@@ -996,7 +1030,7 @@ async function herdCheck(){
    const c=new AbortController();const t=setTimeout(()=>c.abort(),3000);
    const s=await (await fetch(PREFIX+o+'/status',{signal:c.signal})).json();
    clearTimeout(t);
-   herdFails[o]=0;herdMeta[o]=s.meters;herdMode[o]=s.mode;
+   herdFails[o]=0;herdMeta[o]=s.meters;herdMode[o]=s.mode;herdIdent[o]=s.ident||0;
    return {n:n,o:o,ok:1,mode:s.mode,ms:s.meters};
   }catch(e){
    // Debounce: a single missed ping (busy single-threaded server) keeps
@@ -1129,6 +1163,17 @@ function animLab(){
    const k=o+'_'+i;
    if(!simS[k])simS[k]={c:0,flipAt:0,nw:0,nsu:0,fz:0,seizeTo:0};
    const s=simS[k];
+   const idn=herdIdent[o]||0;
+   if(idn>0){
+    const iv=(idn===+i+1)?((t%300<150)?100:0):0;
+    if(m.type==='light'){
+     el.style.background='rgba(255,213,87,'+(iv/100)+')';
+     el.style.boxShadow=iv>15?'0 0 12px rgba(255,213,87,.8)':'none';
+    }else{
+     el.style.transform='rotate('+(-80+iv*1.6)+'deg)';
+    }
+    return;
+   }
    if(m.type==='light'){
     const tv=lTarget(s,m,bm,t);
     s.c+=(tv-s.c)*0.6;
@@ -1144,7 +1189,7 @@ function animLab(){
  requestAnimationFrame(animLab);}
 requestAnimationFrame(animLab);
 const LPATS=['dark','steady','doubleblink','breathe','candle','strobe','random','custom'];
-const COLORS={flicker:'var(--green)',freakout:'var(--red)',coma:'var(--blue)',sweep:'var(--amber)',off:'#3a3a3a'};
+const COLORS={flicker:'var(--green)',freakout:'var(--red)',coma:'var(--blue)',sweep:'var(--amber)',off:'#3a3a3a',identify:'#8fa8c9'};
 let curMode='',curBase='',shownKey='x';
 async function hit(p){
  const t=document.getElementById('tgt').value;
@@ -1189,6 +1234,8 @@ function renderMeters(ms,key){
     'style="cursor:pointer" onclick="renameM('+(i+1)+','+i+')">'+(m.type==='light'?'&#128367; ':'')+m.name.toUpperCase()+
     '<span class="mpin">pin '+m.pin+'</span></span>'+
     '<span class="mctl">'+
+    '<button class="pwr '+(curIdent===i+1?'on3':'off3')+'" id="idb'+i+'" title="identify: blink this channel, all others dark" '+
+    'onclick="idM('+(i+1)+')">&#9678;</button>'+
     '<button class="pwr '+(isOff?'off3':'on3')+'" id="pw'+i+'" title="toggle on/off" '+
     'onclick="togM('+(i+1)+','+i+')">&#9211;</button>'+
     '<select onchange="setM('+(i+1)+',this.value)">'+
@@ -1203,9 +1250,13 @@ function renderMeters(ms,key){
    if(document.activeElement!==s)s.value=m.mode;
    const pw=document.getElementById('pw'+i);
    if(pw)pw.className='pwr '+((m.mode==='off'||m.mode==='dark')?'off3':'on3');
+   const ib=document.getElementById('idb'+i);
+   if(ib)ib.className='pwr '+(curIdent===i+1?'on3':'off3');
    const pb=document.getElementById('pb'+i);
    if(pb&&edIdx<0)pb.innerHTML=m.type==='light'?barHTML(m.steps):barHTMLG(m.steps);});
  }}
+let curIdent=0;
+async function idM(n){try{await fetch(curBase+'/identify?meter='+n)}catch(e){};refresh()}
 // Power toggle: off/dark <-> whatever the channel was doing before.
 let prevMode={};
 async function togM(n,i){
@@ -1315,8 +1366,9 @@ async function refresh(){try{
  const tb=HERD.find(x=>x[0]==t);
  curBase=(t==='all'||+t===s.board||!tb)?'':PREFIX+tb[1];
  let ms=s.meters,mb=s.board;
+ curIdent=s.ident||0;
  if(curBase){try{const ts=await (await fetch(curBase+'/status')).json();
-  ms=ts.meters;mb=ts.board}catch(e){ms=[];mb=t+' (unreachable)'}}
+  ms=ts.meters;mb=ts.board;curIdent=ts.ident||0}catch(e){ms=[];mb=t+' (unreachable)'}}
  document.getElementById('instlabel').textContent='The Instruments — Board '+mb;
  renderMeters(ms,curBase);
  document.getElementById('jlabel').textContent='The Journal — Board '+mb;
@@ -1400,6 +1452,7 @@ void setup() {
     server.on("/pattern", handlePattern);
     server.on("/mpattern", handleMPattern);
     server.on("/rename", handleRename);
+    server.on("/identify", handleIdentify);
     server.on("/live", handleLive);
     server.on("/herd", handleHerd);
     server.on("/status", handleStatus);
@@ -1461,7 +1514,17 @@ void loop() {
     uint32_t now = millis();
     if (now - lastTick >= TICK_MS) {
         lastTick = now;
-        if (allOff) {
+        if (identifyIdx >= 0) {
+            // Identify: the chosen channel blinks hard, everything else dark.
+            if ((int32_t)(now - identifyUntil) >= 0) {
+                identifyIdx = -1;
+            } else {
+                bool on = (now / 150) % 2 == 0;
+                for (int i = 0; i < METER_COUNT; i++) {
+                    meters[i].writeDuty(i == identifyIdx && on ? 1.0f : 0.0f);
+                }
+            }
+        } else if (allOff) {
             // Kill switch: everything eases to dark/zero.
             for (int i = 0; i < METER_COUNT; i++) {
                 if (METERS[i].style == STYLE_LIGHT) meters[i].tickLight(LP_DARK, false, false, nullptr, 0);
