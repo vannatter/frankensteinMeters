@@ -190,6 +190,20 @@ public:
 
         // (STYLE_LIGHT channels are driven via tickLight from the main loop.)
 
+        if (p_->style == STYLE_LUNG && freakout) {
+            // Panting: rapid frantic breaths instead of generic slams.
+            if (beatStart_ == 0 || (int32_t)(now - nextWanderAt_) >= 0) {
+                beatVary_ = frand(0.8f, 1.15f);
+                beatStart_ = now;
+                nextWanderAt_ = now + (uint32_t)(950.0f * beatVary_);
+            }
+            float ph = (now - beatStart_) / (950.0f * beatVary_);
+            target = 0.15f + 0.375f * (1.0f - cosf(2.0f * PI * ph)) + frand(-0.02f, 0.02f);
+            position_ += (target - position_) * 0.25f;
+            writeDuty(position_);
+            return;
+        }
+
         if (freakout) {
             // Being shocked: bursts of full-scale slams, then a seizure hold —
             // locked up trembling near the top — then back to slamming.
@@ -1008,7 +1022,9 @@ function gTarget(s,m,bm,t){
  if(bm==='sweep')return tri(t,8000)*100;
  if(m.style==='heartbeat'&&m.mode==='follow')return heartSim(t,bm);
  if(m.style==='scan'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma')return tri(t,7000)*100;
- if(m.style==='lung'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma'){
+ if(m.style==='lung'&&m.mode==='follow'&&bm==='freakout'){
+  const ph=(t%950)/950;return (0.15+0.375*(1-Math.cos(2*Math.PI*ph)))*100;}
+ if(m.style==='lung'&&m.mode==='follow'&&bm!=='coma'){
   const ph=(t%4400)/4400;return (0.10+0.375*(1-Math.cos(2*Math.PI*ph)))*100;}
  if(m.style==='spastic'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma'){
   if(t>s.nw){s.wt=R(-18,18);s.nw=t+R(90,400);}
