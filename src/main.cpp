@@ -251,9 +251,12 @@ public:
             position_ += (target - position_) * COMA_SPEED;
         } else if (p_->style == STYLE_SCAN) {
             // Patrol sweep at rest: slow full-range triangle with a tremble.
+            // Overshoot the ends slightly so the lagging needle truly reaches
+            // zero and full scale instead of turning around early.
             float ph = (now % 7000) / 7000.0f;
             float trit = ph < 0.5f ? ph * 2.0f : 2.0f - ph * 2.0f;
-            target = trit + frand(-p_->jitter, p_->jitter);
+            trit = constrain(trit * 1.12f - 0.06f, 0.0f, 1.0f);
+            target = constrain(trit + frand(-p_->jitter, p_->jitter), 0.0f, 1.0f);
             position_ += (target - position_) * 0.08f;
         } else if (p_->style == STYLE_LUNG) {
             // Breathing: slow inhale/exhale, each breath slightly different.
@@ -1021,7 +1024,8 @@ function gTarget(s,m,bm,t){
  if(bm==='off'||md==='off')return 0;
  if(bm==='sweep')return tri(t,8000)*100;
  if(m.style==='heartbeat'&&m.mode==='follow')return heartSim(t,bm);
- if(m.style==='scan'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma')return tri(t,7000)*100;
+ if(m.style==='scan'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma')
+  return Math.max(0,Math.min(100,(tri(t,7000)*1.12-0.06)*100));
  if(m.style==='lung'&&m.mode==='follow'&&bm==='freakout'){
   const ph=(t%950)/950;return (0.15+0.375*(1-Math.cos(2*Math.PI*ph)))*100;}
  if(m.style==='lung'&&m.mode==='follow'&&bm!=='coma'){
