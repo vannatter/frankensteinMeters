@@ -249,7 +249,7 @@ public:
                 nextWanderAt_ = now + (uint32_t)(4400.0f * beatVary_);
             }
             float ph = (now - beatStart_) / (4400.0f * beatVary_);
-            target = 0.10f + 0.30f * (1.0f - cosf(2.0f * PI * ph)) + frand(-p_->jitter, p_->jitter);
+            target = 0.10f + 0.375f * (1.0f - cosf(2.0f * PI * ph)) + frand(-p_->jitter, p_->jitter);
             position_ += (target - position_) * 0.10f;
         } else if (p_->style == STYLE_SPASTIC) {
             // Twitchy patrol: fast sweep constantly convulsing off-course.
@@ -1009,7 +1009,7 @@ function gTarget(s,m,bm,t){
  if(m.style==='heartbeat'&&m.mode==='follow')return heartSim(t,bm);
  if(m.style==='scan'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma')return tri(t,7000)*100;
  if(m.style==='lung'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma'){
-  const ph=(t%4400)/4400;return (0.10+0.30*(1-Math.cos(2*Math.PI*ph)))*100;}
+  const ph=(t%4400)/4400;return (0.10+0.375*(1-Math.cos(2*Math.PI*ph)))*100;}
  if(m.style==='spastic'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma'){
   if(t>s.nw){s.wt=R(-18,18);s.nw=t+R(90,400);}
   return Math.max(0,Math.min(100,tri(t,3500)*100+(s.wt||0)+R(-5,5)));}
