@@ -908,7 +908,7 @@ button:active{transform:translateY(2px)}
 button.on{box-shadow:inset 0 0 18px rgba(0,0,0,.7),0 0 14px currentColor;filter:brightness(1.2)}
 .chan{padding:.5rem 0;border-bottom:1px solid var(--edge2)}
 .chan:last-child{border-bottom:0}
-.mrow{display:flex;align-items:center;justify-content:space-between}
+.mrow{display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
 .pbar{display:flex;align-items:flex-end;height:15px;border:1px solid var(--edge2);
 border-radius:2px;overflow:hidden;cursor:pointer;margin-top:.45rem;background:#0d0a07}
 .pbar .on{background:#c9a44a;height:100%}.pbar .off{background:#241c12;height:100%}
@@ -949,13 +949,19 @@ border:1px solid var(--edge);margin:.6rem auto .2rem;transition:background .05s}
 .ebtns button{flex:1;padding:.55rem;font-size:.9rem;outline:none}
 #edtext{width:100%;font:.8rem Menlo,monospace;padding:.4rem .5rem;margin-top:.5rem;
 border-radius:2px;border:1px solid var(--edge2);background:#0d0a07;color:var(--ink);box-sizing:border-box}
-.mname{font-variant:small-caps;letter-spacing:.12em;font-size:1.05rem}
+.mname{font-variant:small-caps;letter-spacing:.12em;font-size:1.05rem;
+flex:1 1 7rem;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mpin{color:var(--dim);font:.68rem Menlo,Consolas,monospace;font-style:normal;
-margin-left:.4rem;letter-spacing:.03em}
-.mrow select{width:9.5rem}
-.mctl{display:flex;align-items:center;gap:.45rem}
-.pwr{display:inline;flex:none;width:1.9rem;height:1.9rem;padding:0;line-height:1;
-font-size:.95rem;border-radius:50%;outline:none}
+margin-left:.4rem;letter-spacing:.03em;white-space:nowrap}
+.mctl{display:flex;align-items:center;gap:.45rem;flex:0 0 auto}
+.mctl select{width:8rem;max-width:44vw}
+@media(max-width:540px){
+ .mname{flex:1 1 100%}
+ .mctl{flex:1 1 100%;justify-content:flex-start}
+ .mctl select{flex:1;width:auto;max-width:none}
+}
+.pwr{display:inline-flex;align-items:center;justify-content:center;flex:none;
+width:2rem;height:2rem;padding:0;line-height:1;font-size:1rem;border-radius:50%;outline:none}
 .pwr.on3{color:#8fd18f;border-color:#3e5238}
 .pwr.off3{color:#555;border-color:#333}
 pre{background:#0a0805;border:1px solid var(--edge2);border-radius:2px;color:#a8b3a0;
