@@ -971,7 +971,7 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <script>
 const OVRS=['follow','flicker','freakout','coma','off','custom','fuzzy','heartbeat','pegged','scan','sputter'];
 let HERD=[],PREFIX='http://192.168.71.';
-let herdMeta={},herdMode={},herdSig='';
+let herdMeta={},herdMode={},herdSig='',herdFails={};
 async function loadHerd(){
  try{
   const h=await (await fetch('/herd')).json();
@@ -987,12 +987,19 @@ async function loadHerd(){
 async function herdCheck(){
  const parts=await Promise.all(HERD.map(async([n,o])=>{
   try{
-   const c=new AbortController();const t=setTimeout(()=>c.abort(),1500);
+   const c=new AbortController();const t=setTimeout(()=>c.abort(),3000);
    const s=await (await fetch(PREFIX+o+'/status',{signal:c.signal})).json();
    clearTimeout(t);
-   herdMeta[o]=s.meters;herdMode[o]=s.mode;
+   herdFails[o]=0;herdMeta[o]=s.meters;herdMode[o]=s.mode;
    return {n:n,o:o,ok:1,mode:s.mode,ms:s.meters};
-  }catch(e){delete herdMeta[o];delete herdMode[o];return {n:n,o:o,ok:0};}
+  }catch(e){
+   // Debounce: a single missed ping (busy single-threaded server) keeps
+   // the last known state; two misses in a row = genuinely unreachable.
+   herdFails[o]=(herdFails[o]||0)+1;
+   if(herdFails[o]<2&&herdMeta[o])return {n:n,o:o,ok:1,mode:herdMode[o],ms:herdMeta[o]};
+   delete herdMeta[o];delete herdMode[o];
+   return {n:n,o:o,ok:0};
+  }
  }));
  const sig=JSON.stringify(parts.map(p=>[p.n,p.ok,p.mode,(p.ms||[]).map(m=>m.name+m.type)]));
  if(sig===herdSig)return;
@@ -1306,7 +1313,6 @@ async function refresh(){try{
   ms=ts.meters;mb=ts.board}catch(e){ms=[];mb=t+' (unreachable)'}}
  document.getElementById('instlabel').textContent='The Instruments — Board '+mb;
  renderMeters(ms,curBase);
- herdCheck();
  document.getElementById('jlabel').textContent='The Journal — Board '+mb;
  const log=document.getElementById('log');
  try{log.textContent=await (await fetch(curBase+'/log')).text();
@@ -1314,6 +1320,7 @@ async function refresh(){try{
  log.scrollTop=log.scrollHeight;
 }catch(e){const p=document.getElementById('pill');p.textContent='OFFLINE';p.style.background='#555'}}
 loadHerd();setInterval(refresh,2000);
+herdCheck();setInterval(herdCheck,4000);
 </script></body></html>)html";
 
 static void handlePanel() {
