@@ -916,8 +916,9 @@ border-radius:2px;overflow:hidden;cursor:pointer;margin-top:.45rem;background:#0
 .hrow{display:flex;justify-content:space-between;align-items:center;padding:.35rem 0;
 border-bottom:1px solid var(--edge2)}
 .hrow:last-child{border-bottom:0}
-.hrow .on2{color:#8fd18f;font-size:.85rem}
-.hrow .off2{color:#6b6b6b;font-size:.85rem}
+.hrow .on2{color:#8fd18f;font-size:.85rem;white-space:nowrap;flex:0 0 auto;padding-left:.5rem}
+.hrow .off2{color:#6b6b6b;font-size:.85rem;white-space:nowrap;flex:0 0 auto;padding-left:.5rem}
+.hrow .mname{flex:0 1 auto}
 .wstrip{display:flex;gap:.7rem;flex-wrap:wrap;padding:.45rem 0 .55rem;
 border-bottom:1px solid var(--edge2)}
 .witem{text-align:center}
