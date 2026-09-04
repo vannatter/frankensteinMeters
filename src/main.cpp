@@ -241,6 +241,26 @@ public:
             float trit = ph < 0.5f ? ph * 2.0f : 2.0f - ph * 2.0f;
             target = trit + frand(-p_->jitter, p_->jitter);
             position_ += (target - position_) * 0.08f;
+        } else if (p_->style == STYLE_LUNG) {
+            // Breathing: slow inhale/exhale, each breath slightly different.
+            if (beatStart_ == 0 || (int32_t)(now - nextWanderAt_) >= 0) {
+                beatVary_ = frand(0.85f, 1.2f);
+                beatStart_ = now;
+                nextWanderAt_ = now + (uint32_t)(4400.0f * beatVary_);
+            }
+            float ph = (now - beatStart_) / (4400.0f * beatVary_);
+            target = 0.10f + 0.30f * (1.0f - cosf(2.0f * PI * ph)) + frand(-p_->jitter, p_->jitter);
+            position_ += (target - position_) * 0.10f;
+        } else if (p_->style == STYLE_SPASTIC) {
+            // Twitchy patrol: fast sweep constantly convulsing off-course.
+            if ((int32_t)(now - nextWanderAt_) >= 0) {
+                wanderTarget_ = frand(-0.18f, 0.18f);
+                nextWanderAt_ = now + (uint32_t)frand(90.0f, 400.0f);
+            }
+            float ph = (now % 3500) / 3500.0f;
+            float trit = ph < 0.5f ? ph * 2.0f : 2.0f - ph * 2.0f;
+            target = constrain(trit + wanderTarget_ + frand(-p_->jitter, p_->jitter), 0.0f, 1.0f);
+            position_ += (target - position_) * 0.20f;
         } else {
             // Slow idle wander: pick a new spot in the idle band now and then.
             if ((int32_t)(now - nextWanderAt_) >= 0) {
@@ -549,6 +569,8 @@ static void handleStatus() {
         body += "\",\"style\":\"";
         body += METERS[i].style == STYLE_HEARTBEAT ? "heartbeat"
                 : METERS[i].style == STYLE_SCAN ? "scan"
+                : METERS[i].style == STYLE_LUNG ? "lung"
+                : METERS[i].style == STYLE_SPASTIC ? "spastic"
                 : (isLight ? "light" : "flicker");
         body += "\",\"mode\":\"";
         body += isLight ? LP_NAMES[lightPatterns[i]] : OVR_NAMES[overrides[i]];
@@ -986,6 +1008,11 @@ function gTarget(s,m,bm,t){
  if(bm==='sweep')return tri(t,8000)*100;
  if(m.style==='heartbeat'&&m.mode==='follow')return heartSim(t,bm);
  if(m.style==='scan'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma')return tri(t,7000)*100;
+ if(m.style==='lung'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma'){
+  const ph=(t%4400)/4400;return (0.10+0.30*(1-Math.cos(2*Math.PI*ph)))*100;}
+ if(m.style==='spastic'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma'){
+  if(t>s.nw){s.wt=R(-18,18);s.nw=t+R(90,400);}
+  return Math.max(0,Math.min(100,tri(t,3500)*100+(s.wt||0)+R(-5,5)));}
  switch(md){
   case 'freakout':
    if(s.seizeTo>t)return R(90,100);
