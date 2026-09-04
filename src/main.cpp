@@ -234,6 +234,24 @@ public:
             }
             target = wanderTarget_ + frand(-FREAK_JITTER, FREAK_JITTER);
             position_ += (target - position_) * FREAK_SPEED;
+        } else if (coma && p_->style == STYLE_LUNG) {
+            // Still breathing, barely: slow shallow breaths, 3-20%.
+            if (beatStart_ == 0 || (int32_t)(now - nextWanderAt_) >= 0) {
+                beatVary_ = frand(0.9f, 1.25f);
+                beatStart_ = now;
+                nextWanderAt_ = now + (uint32_t)(6200.0f * beatVary_);
+            }
+            float ph = (now - beatStart_) / (6200.0f * beatVary_);
+            target = 0.03f + 0.085f * (1.0f - cosf(2.0f * PI * ph)) + frand(-0.004f, 0.004f);
+            position_ += (target - position_) * 0.06f;
+        } else if (coma && p_->style == STYLE_SPASTIC) {
+            // Weak dying twitches near the bottom.
+            if ((int32_t)(now - nextWanderAt_) >= 0) {
+                wanderTarget_ = frand(0.0f, 1.0f) < 0.35f ? frand(0.08f, 0.22f)
+                                                          : frand(0.01f, 0.05f);
+                nextWanderAt_ = now + (uint32_t)frand(600.0f, 2500.0f);
+            }
+            position_ += (wanderTarget_ - position_) * 0.15f;
         } else if (coma) {
             // Barely alive: slow low drift with a faint stir now and then.
             if ((int32_t)(now - nextWanderAt_) >= 0) {
@@ -1028,9 +1046,14 @@ function gTarget(s,m,bm,t){
   return Math.max(0,Math.min(100,(tri(t,7000)*1.12-0.06)*100));
  if(m.style==='lung'&&m.mode==='follow'&&bm==='freakout'){
   const ph=(t%950)/950;return (0.15+0.375*(1-Math.cos(2*Math.PI*ph)))*100;}
- if(m.style==='lung'&&m.mode==='follow'&&bm!=='coma'){
+ if(m.style==='lung'&&m.mode==='follow'&&bm==='coma'){
+  const ph=(t%6200)/6200;return (0.03+0.085*(1-Math.cos(2*Math.PI*ph)))*100;}
+ if(m.style==='lung'&&m.mode==='follow'){
   const ph=(t%4400)/4400;return (0.10+0.375*(1-Math.cos(2*Math.PI*ph)))*100;}
- if(m.style==='spastic'&&m.mode==='follow'&&bm!=='freakout'&&bm!=='coma'){
+ if(m.style==='spastic'&&m.mode==='follow'&&bm==='coma'){
+  if(t>s.nw){s.wt=Math.random()<0.35?R(8,22):R(1,5);s.nw=t+R(600,2500);}
+  return s.wt||3;}
+ if(m.style==='spastic'&&m.mode==='follow'&&bm!=='freakout'){
   if(t>s.nw){s.wt=R(-18,18);s.nw=t+R(90,400);}
   return Math.max(0,Math.min(100,tri(t,3500)*100+(s.wt||0)+R(-5,5)));}
  switch(md){
