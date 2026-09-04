@@ -42,10 +42,14 @@
 // freakout, slow and faint in coma. Tuning in the HEART_* defines below.
 // STYLE_SCAN: patrol sweep at rest — slow bottom-to-top-and-back with a
 // slight tremble — but still slams in freakout and sinks in coma.
+// STYLE_LUNG: breathing monitor — slow inhale/exhale, each breath slightly
+// different.
+// STYLE_SPASTIC: jittery, twitchy patrol — sweeps like scan but faster and
+// constantly convulsing off-course. Not quite a freakout; just unwell.
 // STYLE_LIGHT: a light, not a meter — shows its selected pattern (changeable
 // from the dashboard), except panic/freakout ALWAYS strobes every light and
 // coma darkens them.
-enum MeterStyle { STYLE_FLICKER, STYLE_HEARTBEAT, STYLE_SCAN, STYLE_LIGHT };
+enum MeterStyle { STYLE_FLICKER, STYLE_HEARTBEAT, STYLE_SCAN, STYLE_LUNG, STYLE_SPASTIC, STYLE_LIGHT };
 
 // Patterns a STYLE_LIGHT channel can show (dashboard-selectable):
 //   dark        off until a panic
@@ -87,8 +91,10 @@ static const MeterProfile METERS[METER_COUNT] = {
     // Slots 5-7 for the rest of the collection — generic until calibrated.
     // (12/13/14: same side of the DevKit as the other meter pins. GPIO 12 is
     // a strapping pin — safe with a meter-to-GND load, never tie it high.)
-    {"slot5", 12, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.03f, 0.08f, STYLE_FLICKER, LP_DARK},
-    {"slot6", 13, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.03f, 0.08f, STYLE_FLICKER, LP_DARK},
+    // Pin 12 ("small2"): spastic twitchy scan.
+    {"slot5", 12, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.05f, 0.08f, STYLE_SPASTIC, LP_DARK},
+    // Pin 13 ("small1"): breathing lung monitor.
+    {"slot6", 13, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.01f, 0.08f, STYLE_LUNG, LP_DARK},
     // Slot 7 (pin 14): the ether-scanner — patrol sweep at rest.
     {"slot7", 14, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.02f, 0.08f, STYLE_SCAN, LP_DARK},
 };
