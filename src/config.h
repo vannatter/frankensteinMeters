@@ -107,9 +107,11 @@ static const MeterProfile METERS[METER_COUNT] = {
     {"light2", 33, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DOUBLE},
     {"light3", 27, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_BREATHE},
     {"light4", 26, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
-    {"light5", 4, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
-    {"light6", 5, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
-    {"light7", 15, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    // Lights 5-7 on the LEFT header (D14/D12/D13 — already wired).
+    {"light5", 14, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light6", 12, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light7", 13, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    // Lights 8-12 on the RIGHT header (D18/D19/D21/D22/D23).
     {"light8", 18, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
     {"light9", 19, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
     {"light10", 21, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
