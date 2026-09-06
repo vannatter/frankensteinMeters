@@ -523,6 +523,9 @@ static void savePatternPrefs(int idx) {
 // Kill switch: every pin dark/zero until rekindled.
 static bool allOff = false;
 
+// All-on test: every channel driven full for connectivity checks.
+static bool allOn = false;
+
 // Identify mode: one channel blinks hard while all others go dark — for
 // tracing physical wiring. Auto-expires.
 static int identifyIdx = -1;
@@ -591,6 +594,7 @@ static bool relayedToBoard(const String& path) {
 
 static const char* currentModeName() {
     if (identifyIdx >= 0) return "identify";
+    if (allOn) return "allon";
     if (allOff) return "off";
     if (sweepMode) return "sweep";
     if (freakingOut()) return "freakout";
@@ -813,6 +817,7 @@ static void handleFreakout() {
     if (relayedToBoard(path)) return;
     sweepMode = false;
     allOff = false;
+    allOn = false;
     startFreakout(seconds);
     forwardToPeers(path.c_str());
     server.send(200, "application/json", "{\"mode\":\"freakout\"}\n");
@@ -824,6 +829,7 @@ static void handleCalm() {
     sweepMode = false;
     comaMode = false;
     allOff = false;
+    allOn = false;
     identifyIdx = -1;
     logMsg("calmed by request");
     forwardToPeers("/calm");
@@ -833,11 +839,24 @@ static void handleCalm() {
 static void handleOff() {
     if (relayedToBoard("/off")) return;
     allOff = true;
+    allOn = false;
     freakoutUntil = 0;
     sweepMode = false;
     logMsg("all pins extinguished");
     forwardToPeers("/off");
     server.send(200, "application/json", "{\"mode\":\"off\"}\n");
+}
+
+static void handleAllOn() {
+    if (relayedToBoard("/allon")) return;
+    allOn = true;
+    allOff = false;
+    freakoutUntil = 0;
+    sweepMode = false;
+    identifyIdx = -1;
+    logMsg("all channels ON (connectivity test)");
+    forwardToPeers("/allon");
+    server.send(200, "application/json", "{\"mode\":\"allon\"}\n");
 }
 
 static void handleComa() {
@@ -846,6 +865,7 @@ static void handleComa() {
     sweepMode = false;
     freakoutUntil = 0;
     allOff = false;
+    allOn = false;
     logMsg("coma — barely alive");
     forwardToPeers("/coma");
     server.send(200, "application/json", "{\"mode\":\"coma\"}\n");
@@ -856,6 +876,7 @@ static void handleSweep() {
     sweepMode = true;
     freakoutUntil = 0;
     allOff = false;
+    allOn = false;
     logMsg("calibration sweep on");
     forwardToPeers("/sweep");
     server.send(200, "application/json", "{\"mode\":\"sweep\"}\n");
@@ -903,6 +924,7 @@ button:active{transform:translateY(2px)}
 .b-calm{color:#a9bf99;border-color:#3e5238}
 .b-coma{color:#9daccf;border-color:#394663}
 .b-sweep{color:#d3b075;border-color:#6e5629}
+.b-allon{grid-column:1/-1;color:#d9c98a;border-color:#5c5023}
 .b-off{grid-column:1/-1;color:#8f8f8f;border-color:#3c3c3c}
 .b-off.lit{color:#ffd98a;border-color:#6e5629}
 button.on{box-shadow:inset 0 0 18px rgba(0,0,0,.7),0 0 14px currentColor;filter:brightness(1.2)}
@@ -991,6 +1013,7 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <button class="b-calm" data-m="flicker" onclick="hit('/calm')">Calm<small>steady flicker</small></button>
 <button class="b-coma" data-m="coma" onclick="hit('/coma')">&#9790; Coma<small>barely alive</small></button>
 <button class="b-sweep" data-m="sweep" onclick="hit('/sweep')">Calibrate<small>slow sweep</small></button>
+<button class="b-allon" data-m="allon" onclick="hit('/allon')">&#128161; All On<small>connectivity test</small></button>
 <button class="b-off" data-m="off" id="offbtn" onclick="toggleOff()">&#9760; Extinguish All<small>kill every pin</small></button>
 </div></div>
 <div class="orn">&#10087;</div>
@@ -1092,6 +1115,7 @@ function seqAt(steps,t,gauge){
   x-=d;}
  return 0;}
 function gTarget(s,m,bm,t){
+ if(bm==='allon')return 100;
  const md=m.mode==='follow'?bm:m.mode;
  if(bm==='off'||md==='off')return 0;
  if(bm==='sweep')return tri(t,8000)*100;
@@ -1139,6 +1163,7 @@ function gTarget(s,m,bm,t){
    return (s.wt||25)+s.su+R(-2,2);
  }}
 function lTarget(s,m,bm,t){
+ if(bm==='allon')return 100;
  if(bm==='off'||bm==='coma')return 0;
  if(bm==='freakout'){
   if(t>s.flipAt){s.on=!s.on;s.flipAt=t+(s.on?R(30,90):R(30,120));}
@@ -1196,7 +1221,7 @@ function animLab(){
  requestAnimationFrame(animLab);}
 requestAnimationFrame(animLab);
 const LPATS=['dark','steady','doubleblink','breathe','candle','strobe','random','custom'];
-const COLORS={flicker:'var(--green)',freakout:'var(--red)',coma:'var(--blue)',sweep:'var(--amber)',off:'#3a3a3a',identify:'#8fa8c9'};
+const COLORS={flicker:'var(--green)',freakout:'var(--red)',coma:'var(--blue)',sweep:'var(--amber)',off:'#3a3a3a',identify:'#8fa8c9',allon:'#d9c98a'};
 let curMode='',curBase='',shownKey='x';
 async function hit(p){
  const t=document.getElementById('tgt').value;
@@ -1469,6 +1494,7 @@ void setup() {
     server.on("/sweep", handleSweep);
     server.on("/calm", handleCalm);
     server.on("/off", handleOff);
+    server.on("/allon", handleAllOn);
 #ifdef TRYME_PIN
     pinMode(TRYME_PIN, OUTPUT);
     digitalWrite(TRYME_PIN, LOW);
@@ -1531,6 +1557,9 @@ void loop() {
                     meters[i].writeDuty(i == identifyIdx && on ? 1.0f : 0.0f);
                 }
             }
+        } else if (allOn) {
+            // Connectivity test: every channel driven full.
+            for (int i = 0; i < METER_COUNT; i++) meters[i].writeDuty(1.0f);
         } else if (allOff) {
             // Kill switch: everything eases to dark/zero.
             for (int i = 0; i < METER_COUNT; i++) {
