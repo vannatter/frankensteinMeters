@@ -100,21 +100,21 @@ static const MeterProfile METERS[METER_COUNT] = {
 };
 #else
 // Board 2 is all lighting — 12 channels across two ULN2803s.
-// Chip #1: GPIOs 25,33,27,26 (IN1-4), try-me on 32 (IN5), 12,13,14 (IN6-8).
-// Chip #2: GPIOs 21,22,23,18,19 (IN1-5). Spare GPIOs: 4,5,16,17.
+// This is a 30-pin DevKit: lights 1-4 + try-me (32) on one header, lights
+// 5-12 on the other (4,5,15,18,19,21,22,23). D2 spare (onboard-LED strap).
 static const MeterProfile METERS[METER_COUNT] = {
     {"light1", 25, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_CANDLE},
     {"light2", 33, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DOUBLE},
     {"light3", 27, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_BREATHE},
     {"light4", 26, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
-    {"light5", 12, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
-    {"light6", 13, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
-    {"light7", 14, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
-    {"light8", 21, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
-    {"light9", 22, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
-    {"light10", 23, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
-    {"light11", 18, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
-    {"light12", 19, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light5", 4, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light6", 5, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light7", 15, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light8", 18, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light9", 19, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light10", 21, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light11", 22, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"light12", 23, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
 };
 #endif
 
