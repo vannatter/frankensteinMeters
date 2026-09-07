@@ -587,8 +587,12 @@ static void edisonUpdate() {
     static bool lastOn = false, first = true;
     static uint32_t lastSend = 0;
     uint32_t now = millis();
+    static bool freakHi = false;
     bool freak = freakingOut();
-    uint32_t interval = freak ? 300 : 480;  // pace so each 0.5s fade lands
+    // The dimmer fades over ~0.5s and can't strobe, so in freakout we pace
+    // slow enough that each swing fully lands — a hard throb between blinding
+    // and near-black reads as an overload far better than a mid-range blur.
+    uint32_t interval = freak ? 620 : 480;
     if (!first && now - lastSend < interval) return;
 
     bool wantOn = true;
@@ -603,15 +607,17 @@ static void edisonUpdate() {
         float ph = (now % 8000) / 8000.0f;
         b = (int)((ph < 0.5f ? ph * 2 : 2 - ph * 2) * 100);
     } else if (freak) {
-        // Power surging violently: deep dropouts and brighter spikes.
-        b = frand(0, 1) < 0.30f ? (int)frand(2, 10) : (int)frand(20, 60);
+        // Throb blinding <-> near-black; occasional double-bright for chaos.
+        freakHi = !freakHi;
+        b = freakHi ? (int)frand(95, 100)
+                    : (frand(0, 1) < 0.3f ? (int)frand(60, 80) : (int)frand(1, 3));
     } else if (comaMode) {
         b = (int)frand(2, 7);  // barely-there ember
     } else {
-        // Brown-out hover: mostly dim, with dips near-dark and small surges.
+        // Brown-out hover: mostly dim, dips near-dark, small surges (<=45%).
         float r = frand(0, 1);
         if (r < 0.22f)      b = (int)frand(1, 4);    // deep dip
-        else if (r < 0.34f) b = (int)frand(22, 36);  // small surge
+        else if (r < 0.34f) b = (int)frand(28, 45);  // small surge, capped 45
         else                b = (int)frand(6, 18);   // dim hover
     }
     b = (int)constrain((float)b, 1.0f, 100.0f);
