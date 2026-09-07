@@ -126,6 +126,13 @@ static const MeterProfile METERS[METER_COUNT] = {
 // a freakout starts. See README wiring notes.
 #define TRYME_PIN 32
 #define TRYME_PULSE_MS 500
+
+// Edison bulb via a Shelly Dimmer G4 (mains, E12 socket) on the network.
+// Board 2 drives it over HTTP to match the current mode — candle flicker at
+// rest, violent surging during freakout. A TRIAC dimmer can't strobe, so
+// this is organic incandescent flicker, not the LED strobe.
+#define SHELLY_ENABLED
+#define SHELLY_IP "192.168.68.133"
 #endif
 
 // Freakout strobe light: random on/off times (ms) so it reads as arcing

@@ -559,6 +559,70 @@ static void startFreakout(long seconds) {
     pulseTryme();
 }
 
+#ifdef SHELLY_ENABLED
+// Edison bulb driver: a background task nudges the Shelly dimmer to match the
+// current mode. Runs on its own so its HTTP calls never stall the lights.
+static volatile int edisonManual = -1;  // >=0 forces a brightness, -1 = auto
+static volatile int edisonLevel = 0;    // last brightness sent (for the UI)
+
+static void shellySet(bool on, int bright) {
+    HTTPClient http;
+    String url = String("http://") + SHELLY_IP + "/rpc/Light.Set?id=0&on=" +
+                 (on ? "true" : "false");
+    // Gen4 requires transition_duration >= 0.5s; the half-second fade also
+    // gives the filament an organic incandescent waver.
+    if (on) url += "&brightness=" + String(bright) + "&transition_duration=0.5";
+    http.begin(url);
+    http.setConnectTimeout(600);
+    http.setTimeout(600);
+    http.GET();
+    http.end();
+}
+
+// Called from the HTTP task loop (the context proven to reach the Shelly).
+// The Edison hovers dim and browns out — a failing-mains flicker — except
+// when a mode overrides it. The Shelly's own 0.5s fade smooths each step.
+static void edisonUpdate() {
+    static int lastB = -1;
+    static bool lastOn = false, first = true;
+    static uint32_t lastSend = 0;
+    uint32_t now = millis();
+    bool freak = freakingOut();
+    uint32_t interval = freak ? 300 : 480;  // pace so each 0.5s fade lands
+    if (!first && now - lastSend < interval) return;
+
+    bool wantOn = true;
+    int b = lastB < 0 ? 12 : lastB;
+    if (edisonManual >= 0) {
+        b = edisonManual;
+    } else if (allOff) {
+        wantOn = false;
+    } else if (allOn) {
+        b = 100;  // connectivity test
+    } else if (sweepMode) {
+        float ph = (now % 8000) / 8000.0f;
+        b = (int)((ph < 0.5f ? ph * 2 : 2 - ph * 2) * 100);
+    } else if (freak) {
+        // Power surging violently: deep dropouts and brighter spikes.
+        b = frand(0, 1) < 0.30f ? (int)frand(2, 10) : (int)frand(20, 60);
+    } else if (comaMode) {
+        b = (int)frand(2, 7);  // barely-there ember
+    } else {
+        // Brown-out hover: mostly dim, with dips near-dark and small surges.
+        float r = frand(0, 1);
+        if (r < 0.22f)      b = (int)frand(1, 4);    // deep dip
+        else if (r < 0.34f) b = (int)frand(22, 36);  // small surge
+        else                b = (int)frand(6, 18);   // dim hover
+    }
+    b = (int)constrain((float)b, 1.0f, 100.0f);
+    if (WiFi.status() == WL_CONNECTED && (first || wantOn != lastOn || b != lastB)) {
+        shellySet(wantOn, b);
+        edisonLevel = wantOn ? b : 0;
+        lastSend = now; lastOn = wantOn; lastB = b; first = false;
+    }
+}
+#endif
+
 static void sendToBoard(int octet, const String& path) {
     HTTPClient http;
     String url = BOARD_IP_PREFIX + String(octet) + path;
@@ -609,6 +673,12 @@ static void handleStatus() {
     body += currentModeName();
     body += "\",\"ident\":";
     body += identifyIdx + 1;
+#ifdef SHELLY_ENABLED
+    body += ",\"edison\":";
+    body += edisonLevel;
+    body += ",\"edisonAuto\":";
+    body += (edisonManual < 0) ? "true" : "false";
+#endif
     body += ",\"meters\":[";
     for (int i = 0; i < METER_COUNT; i++) {
         bool isLight = METERS[i].style == STYLE_LIGHT;
@@ -1019,6 +1089,13 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <div class="orn">&#10087;</div>
 <div class="card"><label>The Herd</label><div id="herd"></div></div>
 <div class="orn">&#10087;</div>
+<div class="card"><label>The Filament</label>
+<div class="mrow"><span class="mname">&#128161; EDISON<span class="mpin" id="edval">—</span></span>
+<span class="mctl"><button class="pwr" id="edauto" title="auto brown-out" onclick="edAuto()">&#9211;</button></span></div>
+<div class="crow" style="display:flex;gap:.4rem;margin-top:.5rem;align-items:center">
+<input type="range" id="edsl" min="0" max="100" value="10" style="flex:1;accent-color:#d9a13d" oninput="edLive(this.value)">
+<b id="edslv" style="width:3rem;text-align:right;font-size:.8rem">10%</b></div></div>
+<div class="orn">&#10087;</div>
 <div class="card"><label id="instlabel">The Instruments</label><div id="meters"></div></div>
 <div class="orn mobile">&#10087;</div>
 </div><div class="colR">
@@ -1289,6 +1366,23 @@ function renderMeters(ms,key){
  }}
 let curIdent=0;
 async function idM(n){try{await fetch(curBase+'/identify?meter='+n)}catch(e){};refresh()}
+// Edison/Shelly — always targets board 2 (the board that owns the dimmer).
+function edBase(){const b=HERD.find(x=>x[0]===2);return b?PREFIX+b[1]:PREFIX+'202';}
+let edT=0;
+function edLive(v){
+ document.getElementById('edslv').textContent=v+'%';
+ const now=Date.now();if(now-edT<150)return;edT=now;
+ fetch(edBase()+'/edison?b='+v).catch(e=>{});}
+async function edAuto(){try{await fetch(edBase()+'/edison')}catch(e){}}
+async function edPoll(){
+ try{const s=await (await fetch(edBase()+'/status')).json();
+  if(s.edison===undefined)return;
+  document.getElementById('edval').textContent=s.edisonAuto?('auto '+s.edison+'%'):('manual '+s.edison+'%');
+  document.getElementById('edauto').className='pwr '+(s.edisonAuto?'on3':'off3');
+  const sl=document.getElementById('edsl');
+  if(document.activeElement!==sl){sl.value=s.edison;document.getElementById('edslv').textContent=s.edison+'%';}
+ }catch(e){}}
+setInterval(edPoll,2000);edPoll();
 // Power toggle: off/dark <-> whatever the channel was doing before.
 let prevMode={};
 async function togM(n,i){
@@ -1487,6 +1581,27 @@ void setup() {
     server.on("/identify", handleIdentify);
     server.on("/live", handleLive);
     server.on("/herd", handleHerd);
+#ifdef SHELLY_ENABLED
+    // /edison?b=NN pins the bulb to a brightness for testing; /edison?b=-1
+    // (or no arg) returns it to auto mode-following.
+    server.on("/edison", []() {
+        edisonManual = server.hasArg("b") ? server.arg("b").toInt() : -1;
+        logMsg("edison manual=" + String(edisonManual));
+        server.send(200, "application/json", "{\"ok\":true}\n");
+    });
+    // Diagnostic: does the board actually reach the Shelly? Returns HTTP code.
+    server.on("/shellytest", []() {
+        HTTPClient http;
+        http.begin(String("http://") + SHELLY_IP + "/rpc/Light.Set?id=0&on=true&brightness=25");
+        http.setConnectTimeout(2000);
+        http.setTimeout(2000);
+        int code = http.GET();
+        String body = http.getString();
+        http.end();
+        server.send(200, "application/json",
+                    "{\"code\":" + String(code) + ",\"body\":\"" + body + "\"}\n");
+    });
+#endif
     server.on("/status", handleStatus);
     server.on("/log", handleLog);
     server.on("/freakout", handleFreakout);
@@ -1513,9 +1628,12 @@ void setup() {
     xTaskCreatePinnedToCore([](void*) {
         for (;;) {
             server.handleClient();
+#ifdef SHELLY_ENABLED
+            edisonUpdate();
+#endif
             vTaskDelay(1);
         }
-    }, "http", 8192, nullptr, 1, nullptr, 0);
+    }, "http", 12288, nullptr, 1, nullptr, 0);
 }
 
 void loop() {
