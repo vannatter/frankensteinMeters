@@ -614,11 +614,12 @@ static void edisonUpdate() {
     } else if (comaMode) {
         b = (int)frand(2, 7);  // barely-there ember
     } else {
-        // Brown-out hover: mostly dim, dips near-dark, small surges (<=45%).
+        // Brown-out hover: stays very dim. Mostly single digits/low teens,
+        // dips near-dark, only rare gentle lifts to the low 20s.
         float r = frand(0, 1);
         if (r < 0.22f)      b = (int)frand(1, 4);    // deep dip
-        else if (r < 0.34f) b = (int)frand(28, 45);  // small surge, capped 45
-        else                b = (int)frand(6, 18);   // dim hover
+        else if (r > 0.92f) b = (int)frand(16, 24);  // rare gentle lift
+        else                b = (int)frand(4, 13);   // dim hover
     }
     b = (int)constrain((float)b, 1.0f, 100.0f);
     if (WiFi.status() == WL_CONNECTED && (first || wantOn != lastOn || b != lastB)) {
