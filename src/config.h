@@ -206,7 +206,8 @@ static const MeterProfile METERS[METER_COUNT] = {
 #define COMA_STIR_INTERVAL_MAX_S 25.0f
 
 // How long a freakout lasts if the request doesn't say (seconds).
-#define FREAKOUT_DEFAULT_S 15
+// 20s covers the animatronic's full Try-Me animation.
+#define FREAKOUT_DEFAULT_S 20
 
 // ---------------------------------------------------------------------------
 // Multi-board setup. BOARD_ID comes from platformio.ini (board1 env = 1,
