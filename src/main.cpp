@@ -1520,6 +1520,11 @@ static void handlePanel() {
 
 static void connectWiFi() {
     WiFi.mode(WIFI_STA);
+    // Lower TX power to shrink the transmit current spike that can brown out
+    // a board on a marginal 5V supply. The router is strong here (~-55dBm),
+    // so reduced power costs nothing. (Board 1 was brownout-looping on
+    // WiFi connect — see hardware notes; a solid 5V feed is the real fix.)
+    WiFi.setTxPower(WIFI_POWER_11dBm);
     WiFi.setHostname(WIFI_HOSTNAME);
 #ifdef USE_STATIC_IP
     WiFi.config(IPAddress(STATIC_IP), IPAddress(STATIC_GATEWAY),
