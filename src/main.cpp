@@ -1720,7 +1720,10 @@ void setup() {
     server.begin();
 
 #ifdef STRIP_ENABLED
-    FastLED.addLeds<WS2812B, STRIP_PIN, GRB>(leds, STRIP_LEDS);
+    // Two short data lines from the central box: pin A drives tower 1 (first
+    // half of the buffer), pin B drives tower 2 (second half, mirrored).
+    FastLED.addLeds<WS2812B, STRIP_PIN_A, GRB>(leds, 0, STRIP_HALF);
+    FastLED.addLeds<WS2812B, STRIP_PIN_B, GRB>(leds, STRIP_HALF, STRIP_LEDS - STRIP_HALF);
     FastLED.setMaxPowerInVoltsAndMilliamps(5, STRIP_MAX_MA);  // can't exceed supply
     FastLED.clear(true);
 #endif

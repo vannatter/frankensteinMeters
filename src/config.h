@@ -134,12 +134,19 @@ static const MeterProfile METERS[METER_COUNT] = {
 #define SHELLY_ENABLED
 #define SHELLY_IP "192.168.68.133"
 
-// Addressable WS2812B "lightning" rope strung up two shock towers and arcing
-// over the creature. Data on GPIO 4. STRIP_LEDS = pixels in use; STRIP_CENTER
-// is the creature (bolts converge there). STRIP_MAX_MA caps total draw to the
-// 5V supply (2500 for the on-hand 3A adapter; raise to ~9000 for a 10A).
+// Addressable WS2812B "lightning" ropes — one up each shock tower. The board
+// sits centrally below the creature and drives TWO short (~5ft) data lines,
+// one to each tower, rather than one long daisy-chain across the gap (single-
+// ended WS2812 data won't survive 10ft between towers). Both towers show the
+// identical mirrored effect. Use a 74AHCT125 level shifter + a ground wire
+// alongside each data line for clean 5ft runs.
+//   STRIP_PIN_A -> tower 1,  STRIP_PIN_B -> tower 2
+//   STRIP_LEDS  = TOTAL across both towers (per-tower = STRIP_LEDS/2)
+//   STRIP_MAX_MA = total current cap (2500 for the on-hand 3A bench test;
+//                  ~18000 with two 10A tower supplies).
 #define STRIP_ENABLED
-#define STRIP_PIN 4
+#define STRIP_PIN_A 4
+#define STRIP_PIN_B 5
 #define STRIP_LEDS 50
 #define STRIP_MAX_MA 2500
 #endif
