@@ -16,7 +16,7 @@ set -euo pipefail
 # auto-detects an unrecorded target and prints its MAC to record here.
 MAC_board1="30:76:f5:92:3d:c0"   # meters board
 MAC_board2="30:76:f5:91:97:80"   # lights board (red dot)
-MAC_board3=""                    # lightning controller — record on first flash
+MAC_board3="8c:94:df:4d:13:74"   # lightning controller
 ALL_BOARDS="board1 board2 board3"
 
 TARGET="${1:-}"
