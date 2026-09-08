@@ -30,6 +30,12 @@
 #include "config.h"
 #include "secrets.h"
 
+#ifdef STRIP_ENABLED
+#define FASTLED_INTERNAL  // silence FastLED's version-banner pragma
+#include <FastLED.h>
+static CRGB leds[STRIP_LEDS];
+#endif
+
 static const uint32_t TICK_MS = 10;
 
 static float frand(float lo, float hi) {
@@ -627,6 +633,86 @@ static void edisonUpdate() {
         edisonLevel = wantOn ? b : 0;
         lastSend = now; lastOn = wantOn; lastB = b; first = false;
     }
+}
+#endif
+
+#ifdef STRIP_ENABLED
+// Two shock-tower ropes chained on one data line and MIRRORED: the effect is
+// rendered on the first half (one tower, base->top) and copied to the second
+// half so both towers do the identical bolt. Idle = dark with faint blue
+// crackle; freakout = bright white-blue bolts climbing each tower with
+// full-strip flashes. ~60fps; FastLED caps total current to the supply.
+#define STRIP_HALF (STRIP_LEDS / 2)
+
+// A bolt climbing a tower: head position (0=base), speed, life.
+struct Bolt { float pos; float spd; bool alive; };
+static Bolt bolts[4];
+
+static void spawnBolt() {
+    for (int i = 0; i < 4; i++) {
+        if (!bolts[i].alive) {
+            bolts[i].pos = 0;                    // base of the tower
+            bolts[i].spd = frand(0.6f, 1.8f);    // pixels per frame
+            bolts[i].alive = true;
+            return;
+        }
+    }
+}
+
+static void stripRender() {
+    static uint32_t lastFrame = 0, nextSpark = 0, nextBolt = 0;
+    uint32_t now = millis();
+    if (now - lastFrame < 16) return;  // ~60fps
+    lastFrame = now;
+
+    if (allOff) { FastLED.clear(); FastLED.show(); return; }
+
+    bool freak = freakingOut();
+    // Fade the FIRST HALF (the one tower we render); trails/afterglow.
+    fadeToBlackBy(leds, STRIP_HALF, freak ? 55 : 40);
+
+    if (freak) {
+        if (now >= nextBolt) {
+            spawnBolt();
+            nextBolt = now + (uint32_t)frand(70, 240);
+        }
+        // Occasional full-tower white flash — the big crack.
+        if (frand(0, 1) < 0.06f) fill_solid(leds, STRIP_HALF, CRGB(170, 195, 255));
+        // Bright flare at the top (nearest the creature).
+        if (frand(0, 1) < 0.18f) {
+            for (int j = 0; j < 3; j++) {
+                int p = STRIP_HALF - 1 - j;
+                if (p >= 0) leds[p] = CRGB(210, 230, 255);
+            }
+        }
+    } else if (now >= nextSpark) {
+        // Idle: faint blue crackle.
+        leds[random(STRIP_HALF)] = CRGB(0, 8, 30);
+        nextSpark = now + (uint32_t)frand(120, 700);
+    }
+
+    // Advance bolts up the tower with a short trail; flare on reaching the top.
+    for (int i = 0; i < 4; i++) {
+        if (!bolts[i].alive) continue;
+        bolts[i].pos += bolts[i].spd;
+        int p = (int)bolts[i].pos;
+        if (p >= STRIP_HALF) {
+            bolts[i].alive = false;
+            for (int j = 0; j < 2; j++) {
+                int q = STRIP_HALF - 1 - j;
+                if (q >= 0) leds[q] = CRGB(220, 235, 255);
+            }
+            continue;
+        }
+        leds[p] = CRGB(160, 190, 255);
+        if (p - 1 >= 0) leds[p - 1] += CRGB(40, 50, 90);  // trail
+    }
+
+    // Mirror the rendered tower onto the second rope so both are identical.
+    for (int i = 0; i < STRIP_HALF && STRIP_HALF + i < STRIP_LEDS; i++) {
+        leds[STRIP_HALF + i] = leds[i];
+    }
+    FastLED.show();
 }
 #endif
 
@@ -1633,6 +1719,12 @@ void setup() {
 #endif
     server.begin();
 
+#ifdef STRIP_ENABLED
+    FastLED.addLeds<WS2812B, STRIP_PIN, GRB>(leds, STRIP_LEDS);
+    FastLED.setMaxPowerInVoltsAndMilliamps(5, STRIP_MAX_MA);  // can't exceed supply
+    FastLED.clear(true);
+#endif
+
     // Serve HTTP on core 0 as a dedicated task — requests no longer take
     // turns with the 100Hz animation loop (which owns core 1). Cures the
     // dashboard's false "unreachable" stalls under load.
@@ -1649,6 +1741,10 @@ void setup() {
 }
 
 void loop() {
+
+#ifdef STRIP_ENABLED
+    stripRender();
+#endif
 
 #ifdef TRYME_PIN
     if (trymeOffAt && (int32_t)(millis() - trymeOffAt) >= 0) {
