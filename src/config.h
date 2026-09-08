@@ -11,8 +11,10 @@
 #endif
 #if BOARD_ID == 1
 #define METER_COUNT 7
-#else
+#elif BOARD_ID == 2
 #define METER_COUNT 12
+#else
+#define METER_COUNT 2   // board 3: lightning controller + 2 aux light channels
 #endif
 
 // PWM settings. 5 kHz is far above the needle's mechanical response, so the
@@ -98,7 +100,7 @@ static const MeterProfile METERS[METER_COUNT] = {
     // Slot 7 (pin 14): the ether-scanner — patrol sweep at rest.
     {"slot7", 14, PWM_MAX_DUTY, 0.15f, 0.45f, 0.70f, 1.00f, 3.0f, 10.0f, 0.02f, 0.08f, STYLE_SCAN, LP_DARK},
 };
-#else
+#elif BOARD_ID == 2
 // Board 2 is all lighting — 12 channels across two ULN2803s.
 // This is a 30-pin DevKit: lights 1-4 + try-me (32) on one header, lights
 // 5-12 on the other (4,5,15,18,19,21,22,23). D2 spare (onboard-LED strap).
@@ -118,6 +120,13 @@ static const MeterProfile METERS[METER_COUNT] = {
     {"light11", 22, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
     {"light12", 23, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
 };
+#else
+// Board 3: the lightning controller (in the central box). No meters; two aux
+// light channels on spare pins for future extras (e.g., tower accents).
+static const MeterProfile METERS[METER_COUNT] = {
+    {"aux1", 25, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+    {"aux2", 26, PWM_MAX_DUTY, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_LIGHT, LP_DARK},
+};
 #endif
 
 #if BOARD_ID == 2
@@ -133,17 +142,18 @@ static const MeterProfile METERS[METER_COUNT] = {
 // this is organic incandescent flicker, not the LED strobe.
 #define SHELLY_ENABLED
 #define SHELLY_IP "192.168.68.133"
+#endif
 
+#if BOARD_ID == 3
 // Addressable WS2812B "lightning" ropes — one up each shock tower. The board
-// sits centrally below the creature and drives TWO short (~5ft) data lines,
-// one to each tower, rather than one long daisy-chain across the gap (single-
-// ended WS2812 data won't survive 10ft between towers). Both towers show the
-// identical mirrored effect. Use a 74AHCT125 level shifter + a ground wire
-// alongside each data line for clean 5ft runs.
+// sits in the central box below the creature and drives TWO short (~5ft) data
+// lines, one to each tower, rather than one long daisy-chain across the gap
+// (single-ended WS2812 data won't survive 10ft between towers). Both towers
+// show the identical mirrored effect.
 //   STRIP_PIN_A -> tower 1,  STRIP_PIN_B -> tower 2
 //   STRIP_LEDS  = TOTAL across both towers (per-tower = STRIP_LEDS/2)
-//   STRIP_MAX_MA = total current cap (2500 for the on-hand 3A bench test;
-//                  ~18000 with two 10A tower supplies).
+//   STRIP_MAX_MA = total current cap (2500 for a 3A bench test; ~18000 with
+//                  two 10A tower supplies).
 #define STRIP_ENABLED
 #define STRIP_PIN_A 4
 #define STRIP_PIN_B 5
@@ -254,4 +264,4 @@ static const MeterProfile METERS[METER_COUNT] = {
 // with ?all=1 (which the control-panel buttons use) are forwarded to all the
 // others, so pressing FREAKOUT on any board convulses the whole lab. Add an
 // octet here when a new board joins.
-static const int ALL_BOARD_OCTETS[] = {201, 202};
+static const int ALL_BOARD_OCTETS[] = {201, 202, 203};
