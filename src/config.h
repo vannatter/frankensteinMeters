@@ -133,6 +133,15 @@ static const MeterProfile METERS[METER_COUNT] = {
 // this is organic incandescent flicker, not the LED strobe.
 #define SHELLY_ENABLED
 #define SHELLY_IP "192.168.68.133"
+
+// Addressable WS2812B "lightning" rope strung up two shock towers and arcing
+// over the creature. Data on GPIO 4. STRIP_LEDS = pixels in use; STRIP_CENTER
+// is the creature (bolts converge there). STRIP_MAX_MA caps total draw to the
+// 5V supply (2500 for the on-hand 3A adapter; raise to ~9000 for a 10A).
+#define STRIP_ENABLED
+#define STRIP_PIN 4
+#define STRIP_LEDS 50
+#define STRIP_MAX_MA 2500
 #endif
 
 // Freakout strobe light: random on/off times (ms) so it reads as arcing
