@@ -668,21 +668,34 @@ static void stripRender() {
     if (allOff) { FastLED.clear(); FastLED.show(); return; }
 
     bool freak = freakingOut();
+    // Detect the moment panic STARTS -> a ~1s green spark burst at his head.
+    static bool wasFreak = false;
+    static uint32_t greenFlashUntil = 0;
+    if (freak && !wasFreak) greenFlashUntil = now + 1000;
+    wasFreak = freak;
+
     // Fade the FIRST HALF (the one tower we render); trails/afterglow.
     fadeToBlackBy(leds, STRIP_HALF, freak ? 55 : 40);
 
     if (freak) {
+        // Panic just hit: bright sparking green at the head (he jolts awake).
+        if (now < greenFlashUntil) {
+            for (int j = 0; j < 18; j++) {
+                int p = STRIP_HALF - 1 - j;   // head = far end
+                if (p >= 0 && frand(0, 1) < 0.75f) leds[p] = CRGB(80, 255, 90);
+            }
+        }
         if (now >= nextBolt) {
             spawnBolt();
             nextBolt = now + (uint32_t)frand(70, 240);
         }
         // Occasional full-tower white flash — the big crack.
-        if (frand(0, 1) < 0.06f) fill_solid(leds, STRIP_HALF, CRGB(170, 195, 255));
+        if (frand(0, 1) < 0.06f) fill_solid(leds, STRIP_HALF, CRGB(255, 255, 255));
         // Bright flare at the top (nearest the creature).
         if (frand(0, 1) < 0.18f) {
-            for (int j = 0; j < 3; j++) {
+            for (int j = 0; j < 4; j++) {
                 int p = STRIP_HALF - 1 - j;
-                if (p >= 0) leds[p] = CRGB(210, 230, 255);
+                if (p >= 0) leds[p] = CRGB(255, 255, 255);
             }
         }
     } else {
@@ -709,14 +722,17 @@ static void stripRender() {
         int p = (int)bolts[i].pos;
         if (p >= STRIP_HALF) {
             bolts[i].alive = false;
-            for (int j = 0; j < 2; j++) {
+            for (int j = 0; j < 4; j++) {
                 int q = STRIP_HALF - 1 - j;
-                if (q >= 0) leds[q] = CRGB(220, 235, 255);
+                if (q >= 0) leds[q] = CRGB(255, 255, 255);  // full-white impact
             }
             continue;
         }
-        leds[p] = CRGB(160, 190, 255);
-        if (p - 1 >= 0) leds[p - 1] += CRGB(40, 50, 90);  // trail
+        // Fat, bright bolt head: bright white-blue core + adjacent glow.
+        leds[p] = CRGB(230, 245, 255);
+        if (p + 1 < STRIP_HALF) leds[p + 1] = CRGB(160, 190, 255);
+        if (p - 1 >= 0) leds[p - 1] = CRGB(160, 190, 255);
+        if (p - 2 >= 0) leds[p - 2] += CRGB(60, 75, 120);  // trail
     }
 
     // Mirror the rendered tower onto the second rope so both are identical.
