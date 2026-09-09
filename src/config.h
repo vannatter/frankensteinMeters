@@ -157,8 +157,8 @@ static const MeterProfile METERS[METER_COUNT] = {
 #define STRIP_ENABLED
 #define STRIP_PIN_A 4
 #define STRIP_PIN_B 5
-#define STRIP_LEDS 50
-#define STRIP_MAX_MA 2500
+#define STRIP_LEDS 360      // ~180 per rope (BTF 9.8ft, 60/m) x2 towers
+#define STRIP_MAX_MA 18000  // two 5V/10A bricks (~9A per rope)
 #endif
 
 // Freakout strobe light: random on/off times (ms) so it reads as arcing
