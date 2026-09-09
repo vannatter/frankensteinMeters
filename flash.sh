@@ -14,7 +14,7 @@ set -euo pipefail
 
 # Known board MACs (lowercase). Blank until first sighting; the script
 # auto-detects an unrecorded target and prints its MAC to record here.
-MAC_board1="30:76:f5:92:3d:c0"   # meters board
+MAC_board1="70:4b:ca:6e:94:88"   # meters board (replaced 2026-09-09; old brownout-prone board was 30:76:f5:92:3d:c0)
 MAC_board2="30:76:f5:91:97:80"   # lights board (red dot)
 MAC_board3="8c:94:df:4d:13:74"   # lightning controller
 ALL_BOARDS="board1 board2 board3"

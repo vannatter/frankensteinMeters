@@ -674,8 +674,10 @@ static void stripRender() {
     if (freak && !wasFreak) greenFlashUntil = now + 1000;
     wasFreak = freak;
 
-    // Fade the FIRST HALF (the one tower we render); trails/afterglow.
-    fadeToBlackBy(leds, STRIP_HALF, freak ? 55 : 40);
+    // Fade the FIRST HALF (the one tower we render); trails/afterglow. Idle
+    // fades hard so the drifting energy reads as a compact RING, not a
+    // long-tailed comet; freak keeps a gentler fade for bolt trails.
+    fadeToBlackBy(leds, STRIP_HALF, freak ? 55 : 150);
 
     if (freak) {
         // Panic just hit: bright sparking green at the head (he jolts awake).
@@ -698,19 +700,49 @@ static void stripRender() {
                 if (p >= 0) leds[p] = CRGB(255, 255, 255);
             }
         }
+    } else if (comaMode) {
+        // Coma: barely alive — only his temples, a slow faint blue pulse. The
+        // hard idle fade keeps the rest of the tower dark.
+        float ph = (now % 3500) / 3500.0f;
+        float pulse = 0.5f * (1.0f - cosf(2.0f * PI * ph));   // 0..1 breath
+        uint8_t b = (uint8_t)(18 + 150 * pulse);
+        for (int k = 0; k < 2; k++) {                         // just the last 2 px
+            int p = STRIP_HALF - 1 - k;
+            if (p >= 0) leds[p] = CRGB(0, b / 8, b);          // cold blue
+        }
     } else {
-        // Idle: a blue energy ring drifts up the tower (base -> top), looping,
-        // with a comet tail from the per-frame fade.
+        // Idle: a tight green energy ring flows continuously up the tower to
+        // his head, looping — it never stops.
         static float ringPos = 0;
-        ringPos += 0.35f;                       // ~21 px/s at 60fps
-        if (ringPos >= STRIP_HALF + 4) ringPos = -4;
+        static bool armed = true;                  // re-armed each loop
+        ringPos += 0.35f;                          // ~21 px/s at 60fps
+        bool hitHead = false;
+        if (ringPos >= STRIP_HALF - 1 && armed) { hitHead = true; armed = false; }
+        if (ringPos >= STRIP_HALF + 4) { ringPos = -4; armed = true; }
         int c = (int)ringPos;
-        for (int j = -2; j <= 2; j++) {
-            int p = c + j;
-            if (p >= 0 && p < STRIP_HALF) {
-                uint8_t lvl = 90 - abs(j) * 28;  // brighter at the ring's center
-                leds[p] = CRGB(0, lvl, lvl / 6); // toxic electric green
+        if (c >= 0 && c < STRIP_HALF) leds[c] = CRGB(0, 180, 30);
+
+        // OVERCHARGE — when the ring reaches his head it has only a CHANCE to
+        // ignite a single white pixel at his temple that flickers chaotically
+        // (random speed, random on/off, random brightness) — not every pass,
+        // never a steady pulse. Layered over the still-flowing ring.
+        static uint32_t overUntil = 0, flickNext = 0;
+        static bool overOn = false, flickLit = false;
+        if (hitHead && !overOn && frand(0, 1) < 0.4f) {
+            overOn = true;
+            overUntil = now + (uint32_t)frand(500, 1900);   // random duration
+            flickNext = 0;
+        }
+        if (overOn) {
+            if (now >= flickNext) {                 // random speed + random pattern
+                flickLit = frand(0, 1) < 0.6f;
+                flickNext = now + (uint32_t)frand(15, 130);
             }
+            if (flickLit) {                         // one white pixel at his head
+                uint8_t w = (uint8_t)frand(120, 255);
+                leds[STRIP_HALF - 1] = CRGB(w, w, w);
+            }
+            if (now >= overUntil) overOn = false;
         }
         (void)nextSpark;
     }
@@ -759,18 +791,21 @@ static void stripRender() {
             nextStrobe = 0;
         }
         if (now < glitchUntil) {
-            // The whole zone buzzes: strobe solid green on/off, fast/erratic.
+            // The zone shorts out with the same chaotic flicker as the temple
+            // overcharge: random on/off (not a steady toggle), random speed,
+            // random brightness.
             if (now >= nextStrobe) {
-                strobeOn = !strobeOn;
-                nextStrobe = now + (uint32_t)frand(20, 60);
+                strobeOn = frand(0, 1) < 0.6f;
+                nextStrobe = now + (uint32_t)frand(15, 130);
             }
             if (strobeOn) {
+                uint8_t g = (uint8_t)frand(120, 255);
                 for (int half = 0; half < 2; half++) {
                     if (glitchTarget == 1 && half == 1) continue;
                     if (glitchTarget == 2 && half == 0) continue;
                     int base = half * STRIP_HALF;
                     for (int i = secStart; i < secStart + secLen; i++) {
-                        leds[base + i] = CRGB(0, 255, 45);
+                        leds[base + i] = CRGB(0, g, g / 6);
                     }
                 }
             }
@@ -780,25 +815,25 @@ static void stripRender() {
 }
 #endif
 
-static void sendToBoard(int octet, const String& path) {
+static void sendToBoard(const char* ip, const String& path) {
     HTTPClient http;
-    String url = BOARD_IP_PREFIX + String(octet) + path;
+    String url = "http://" + String(ip) + path;
     http.begin(url);
     http.setConnectTimeout(1500);
     http.setTimeout(1500);
     int code = http.GET();
     http.end();
-    logMsg("→ board ." + String(octet) + " " + path +
+    logMsg("→ board " + String(ip) + " " + path +
            (code > 0 ? " ok" : " unreachable"));
 }
 
 // If the request carried ?all=1, repeat it to every other board in
-// ALL_BOARD_OCTETS (without the all flag, so it doesn't bounce around).
+// ALL_BOARDS (without the all flag, so it doesn't bounce around).
 static void forwardToPeers(const char* path) {
     if (!server.hasArg("all") || WiFi.status() != WL_CONNECTED) return;
-    for (unsigned i = 0; i < sizeof(ALL_BOARD_OCTETS) / sizeof(int); i++) {
-        if (ALL_BOARD_OCTETS[i] == 200 + BOARD_ID) continue;
-        sendToBoard(ALL_BOARD_OCTETS[i], path);
+    for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
+        if (ALL_BOARDS[i].id == BOARD_ID) continue;
+        sendToBoard(ALL_BOARDS[i].ip, path);
     }
 }
 
@@ -808,7 +843,9 @@ static bool relayedToBoard(const String& path) {
     if (!server.hasArg("board")) return false;
     int b = server.arg("board").toInt();
     if (b == BOARD_ID) return false;
-    sendToBoard(200 + b, path);
+    for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
+        if (ALL_BOARDS[i].id == b) { sendToBoard(ALL_BOARDS[i].ip, path); break; }
+    }
     server.send(200, "application/json", "{\"relayed\":" + String(b) + "}\n");
     return true;
 }
@@ -998,17 +1035,20 @@ static void handleRename() {
 }
 
 // /herd — the configured board roster (single source of truth: config.h's
-// ALL_BOARD_OCTETS). The dashboard builds its herd card, live poller, and
-// target dropdown from this instead of hardcoding addresses.
+// ALL_BOARDS). The dashboard builds its herd card, live poller, and target
+// dropdown from this instead of hardcoding addresses. Each board carries its
+// full base url (boards span two subnets now) plus a short octet key.
 static void handleHerd() {
-    String body = "{\"prefix\":\"" BOARD_IP_PREFIX "\",\"boards\":[";
-    for (unsigned i = 0; i < sizeof(ALL_BOARD_OCTETS) / sizeof(int); i++) {
+    String body = "{\"boards\":[";
+    for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
         if (i) body += ",";
         body += "{\"n\":";
-        body += ALL_BOARD_OCTETS[i] - 200;
+        body += ALL_BOARDS[i].id;
         body += ",\"o\":";
-        body += ALL_BOARD_OCTETS[i];
-        body += "}";
+        body += ALL_BOARDS[i].octet;
+        body += ",\"url\":\"http://";
+        body += ALL_BOARDS[i].ip;
+        body += "\"}";
     }
     body += "]}\n";
     server.send(200, "application/json", body);
@@ -1274,25 +1314,24 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 </div></div></div>
 <script>
 const OVRS=['follow','flicker','freakout','coma','off','custom','fuzzy','heartbeat','pegged','scan','sputter'];
-let HERD=[],PREFIX='http://192.168.71.';
+let HERD=[];
 let herdMeta={},herdMode={},herdIdent={},herdSig='',herdFails={};
 async function loadHerd(){
  try{
   const h=await (await fetch('/herd')).json();
-  PREFIX=h.prefix;
-  HERD=h.boards.map(b=>[b.n,b.o]);
+  HERD=h.boards.map(b=>[b.n,b.o,b.url]);
   const t=document.getElementById('tgt');
-  HERD.forEach(([n,o])=>{
+  HERD.forEach(([n,o,u])=>{
    const op=document.createElement('option');
    op.value=n;op.textContent='Board '+n+' (.'+o+')';
    t.appendChild(op);});
  }catch(e){}
  refresh();}
 async function herdCheck(){
- const parts=await Promise.all(HERD.map(async([n,o])=>{
+ const parts=await Promise.all(HERD.map(async([n,o,u])=>{
   try{
    const c=new AbortController();const t=setTimeout(()=>c.abort(),3000);
-   const s=await (await fetch(PREFIX+o+'/status',{signal:c.signal})).json();
+   const s=await (await fetch(u+'/status',{signal:c.signal})).json();
    clearTimeout(t);
    herdFails[o]=0;herdMeta[o]=s.meters;herdMode[o]=s.mode;herdIdent[o]=s.ident||0;
    return {n:n,o:o,ok:1,mode:s.mode,ms:s.meters};
@@ -1670,6 +1709,11 @@ static void handlePanel() {
 
 static void connectWiFi() {
     WiFi.mode(WIFI_STA);
+    // Keep the radio awake. Default modem-sleep dozes between beacons and drops
+    // incoming requests — harmless on the Espressif boards but it made board
+    // 1's flakier clone WiFi module reachable only intermittently (it flapped
+    // ~3/6 pings). These boards run on mains/USB, so there's no battery to save.
+    WiFi.setSleep(false);
     // Lower TX power to shrink the transmit current spike that can brown out
     // a board on a marginal 5V supply. The router is strong here (~-55dBm),
     // so reduced power costs nothing. (Board 1 was brownout-looping on

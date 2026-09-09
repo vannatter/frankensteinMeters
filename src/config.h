@@ -157,7 +157,7 @@ static const MeterProfile METERS[METER_COUNT] = {
 #define STRIP_ENABLED
 #define STRIP_PIN_A 4
 #define STRIP_PIN_B 5
-#define STRIP_LEDS 360      // ~180 per rope (BTF 9.8ft, 60/m) x2 towers
+#define STRIP_LEDS 300      // 150 per rope (calibrated pixel-perfect) x2 towers
 #define STRIP_MAX_MA 14000  // ~7A/rope worst case under two 10A bricks — safe
                             // margin, with room for the brighter maxed effect.
 // Rope routing: data-in/power connector at the tower, rope runs off to the
@@ -258,14 +258,27 @@ static const MeterProfile METERS[METER_COUNT] = {
 // Static IP so each board is always at the same address (mDNS .local names
 // don't resolve reliably on this mesh network). Comment out USE_STATIC_IP to
 // go back to DHCP.
+// Board 1's new DevKit (70:4B:CA… vendor) won't take a static IP on this mesh —
+// it never announces itself and stays unreachable. It runs on DHCP instead,
+// pinned to a fixed address by a Deco reservation. Boards 2 & 3 (Espressif
+// chips) keep working static IPs.
+#if BOARD_ID != 1
 #define USE_STATIC_IP
-#define BOARD_IP_PREFIX "http://192.168.71."
+#endif
 #define STATIC_IP 192, 168, 71, (200 + BOARD_ID)
 #define STATIC_GATEWAY 192, 168, 68, 1
 #define STATIC_SUBNET 255, 255, 252, 0
 
-// Every board in the lab, by last IP octet (192.168.71.x). Commands sent
-// with ?all=1 (which the control-panel buttons use) are forwarded to all the
-// others, so pressing FREAKOUT on any board convulses the whole lab. Add an
-// octet here when a new board joins.
-static const int ALL_BOARD_OCTETS[] = {201, 202, 203};
+// Every board in the lab, as a FULL address (boards no longer share one
+// subnet: board 1's DHCP-reserved DevKit lives on 192.168.68.x, boards 2 & 3
+// on their static 192.168.71.x). Commands sent with ?all=1 (which the
+// control-panel buttons use) are forwarded to every other board, so pressing
+// FREAKOUT on any board convulses the whole lab. `octet` is just the last
+// number, used for display + as the dashboard's per-board key.
+struct BoardAddr { int id; int octet; const char* ip; };
+static const BoardAddr ALL_BOARDS[] = {
+    {1, 125, "192.168.68.125"},   // meters (new DevKit, DHCP reservation)
+    {2, 202, "192.168.71.202"},   // lights (static)
+    {3, 203, "192.168.71.203"},   // lightning (static)
+};
+static const unsigned ALL_BOARDS_N = sizeof(ALL_BOARDS) / sizeof(ALL_BOARDS[0]);
