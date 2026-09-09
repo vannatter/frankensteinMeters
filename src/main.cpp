@@ -712,21 +712,6 @@ static void stripRender() {
                 leds[p] = CRGB(0, lvl, lvl / 6); // toxic electric green
             }
         }
-        // Unstable equipment: random glitch — a brief green spark-storm scatters
-        // along the rope every few-to-many seconds, then settles. It's alive.
-        static uint32_t nextGlitch = 0, glitchUntil = 0;
-        if (now >= nextGlitch) {
-            glitchUntil = now + (uint32_t)frand(80, 380);
-            nextGlitch = now + (uint32_t)frand(4000, 18000);
-        }
-        if (now < glitchUntil) {
-            int n = (int)frand(4, 14);
-            for (int k = 0; k < n; k++) {
-                int p = random(STRIP_HALF);
-                leds[p] = (frand(0, 1) < 0.3f) ? CRGB(180, 255, 180)  // white-green
-                                               : CRGB(0, 255, 40);     // green spark
-            }
-        }
         (void)nextSpark;
     }
 
@@ -753,6 +738,43 @@ static void stripRender() {
     // Mirror the rendered tower onto the second rope so both are identical.
     for (int i = 0; i < STRIP_HALF && STRIP_HALF + i < STRIP_LEDS; i++) {
         leds[STRIP_HALF + i] = leds[i];
+    }
+
+    // Unstable equipment: random idle GLITCH — a green spark-storm floods a
+    // whole rope. Applied AFTER the mirror so it can misfire on BOTH towers or
+    // just ONE. White sparks bias toward the start (tower connector end).
+    if (!freak) {
+        static uint32_t nextGlitch = 0, glitchUntil = 0, nextStrobe = 0;
+        static int glitchTarget = 0;      // 0=both, 1=tower1, 2=tower2
+        static int secStart = 0, secLen = 0;
+        static bool strobeOn = false;
+        if (now >= nextGlitch) {
+            glitchUntil = now + (uint32_t)frand(120, 500);
+            nextGlitch = now + (uint32_t)frand(3500, 16000);
+            float r = frand(0, 1);
+            glitchTarget = r < 0.45f ? 0 : (r < 0.725f ? 1 : 2);
+            secLen = (int)frand(8, 26);   // a short faulting zone
+            secStart = random(STRIP_HALF - secLen);
+            strobeOn = true;
+            nextStrobe = 0;
+        }
+        if (now < glitchUntil) {
+            // The whole zone buzzes: strobe solid green on/off, fast/erratic.
+            if (now >= nextStrobe) {
+                strobeOn = !strobeOn;
+                nextStrobe = now + (uint32_t)frand(20, 60);
+            }
+            if (strobeOn) {
+                for (int half = 0; half < 2; half++) {
+                    if (glitchTarget == 1 && half == 1) continue;
+                    if (glitchTarget == 2 && half == 0) continue;
+                    int base = half * STRIP_HALF;
+                    for (int i = secStart; i < secStart + secLen; i++) {
+                        leds[base + i] = CRGB(0, 255, 45);
+                    }
+                }
+            }
+        }
     }
     FastLED.show();
 }
