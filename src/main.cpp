@@ -712,6 +712,21 @@ static void stripRender() {
                 leds[p] = CRGB(0, lvl, lvl / 6); // toxic electric green
             }
         }
+        // Unstable equipment: random glitch — a brief green spark-storm scatters
+        // along the rope every few-to-many seconds, then settles. It's alive.
+        static uint32_t nextGlitch = 0, glitchUntil = 0;
+        if (now >= nextGlitch) {
+            glitchUntil = now + (uint32_t)frand(80, 380);
+            nextGlitch = now + (uint32_t)frand(4000, 18000);
+        }
+        if (now < glitchUntil) {
+            int n = (int)frand(4, 14);
+            for (int k = 0; k < n; k++) {
+                int p = random(STRIP_HALF);
+                leds[p] = (frand(0, 1) < 0.3f) ? CRGB(180, 255, 180)  // white-green
+                                               : CRGB(0, 255, 40);     // green spark
+            }
+        }
         (void)nextSpark;
     }
 
