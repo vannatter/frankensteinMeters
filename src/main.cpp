@@ -696,7 +696,7 @@ static void stripRender() {
             int p = c + j;
             if (p >= 0 && p < STRIP_HALF) {
                 uint8_t lvl = 90 - abs(j) * 28;  // brighter at the ring's center
-                leds[p] = CRGB(0, lvl / 3, lvl); // cool electric blue
+                leds[p] = CRGB(0, lvl, lvl / 6); // toxic electric green
             }
         }
         (void)nextSpark;
