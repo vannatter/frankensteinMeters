@@ -159,6 +159,9 @@ static const MeterProfile METERS[METER_COUNT] = {
 #define STRIP_PIN_B 5
 #define STRIP_LEDS 360      // ~180 per rope (BTF 9.8ft, 60/m) x2 towers
 #define STRIP_MAX_MA 9000   // ONE 10A brick for now; raise to 18000 with two
+// Rope routing: data-in/power connector at the tower, rope runs off to the
+// creature's head (the FAR end / last pixels). The bolt spawns at pixel 0
+// (tower) and flares at the far end (his head) — no flip needed.
 #endif
 
 // Freakout strobe light: random on/off times (ms) so it reads as arcing

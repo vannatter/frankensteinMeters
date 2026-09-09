@@ -685,10 +685,21 @@ static void stripRender() {
                 if (p >= 0) leds[p] = CRGB(210, 230, 255);
             }
         }
-    } else if (now >= nextSpark) {
-        // Idle: faint blue crackle.
-        leds[random(STRIP_HALF)] = CRGB(0, 8, 30);
-        nextSpark = now + (uint32_t)frand(120, 700);
+    } else {
+        // Idle: a blue energy ring drifts up the tower (base -> top), looping,
+        // with a comet tail from the per-frame fade.
+        static float ringPos = 0;
+        ringPos += 0.35f;                       // ~21 px/s at 60fps
+        if (ringPos >= STRIP_HALF + 4) ringPos = -4;
+        int c = (int)ringPos;
+        for (int j = -2; j <= 2; j++) {
+            int p = c + j;
+            if (p >= 0 && p < STRIP_HALF) {
+                uint8_t lvl = 90 - abs(j) * 28;  // brighter at the ring's center
+                leds[p] = CRGB(0, lvl / 3, lvl); // cool electric blue
+            }
+        }
+        (void)nextSpark;
     }
 
     // Advance bolts up the tower with a short trail; flare on reaching the top.
