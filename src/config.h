@@ -158,7 +158,9 @@ static const MeterProfile METERS[METER_COUNT] = {
 #define STRIP_PIN_A 4
 #define STRIP_PIN_B 5
 #define STRIP_LEDS 360      // ~180 per rope (BTF 9.8ft, 60/m) x2 towers
-#define STRIP_MAX_MA 18000  // two 5V/10A bricks, one per rope (~9A each)
+#define STRIP_MAX_MA 9000   // safe margin: ~4.5A/rope worst case under two 10A
+                            // bricks. Effect rarely hits the cap, so higher
+                            // looks identical — keep the headroom.
 // Rope routing: data-in/power connector at the tower, rope runs off to the
 // creature's head (the FAR end / last pixels). The bolt spawns at pixel 0
 // (tower) and flares at the far end (his head) — no flip needed.
