@@ -700,6 +700,19 @@ static void stripRender() {
                 if (p >= 0) leds[p] = CRGB(255, 255, 255);
             }
         }
+    } else if (sweepMode) {
+        // Calibrate: one white LED walks base -> last pixel -> back, one LED at
+        // a time. Doubles as a locator to find/verify the real rope length.
+        static int sweepIdx = 0, sweepDir = 1;
+        static uint32_t sweepNext = 0;
+        if (now >= sweepNext) {
+            sweepIdx += sweepDir;
+            if (sweepIdx >= STRIP_HALF - 1) { sweepIdx = STRIP_HALF - 1; sweepDir = -1; }
+            else if (sweepIdx <= 0)         { sweepIdx = 0;              sweepDir = 1; }
+            sweepNext = now + 45;                 // one LED every ~45ms
+        }
+        fill_solid(leds, STRIP_HALF, CRGB::Black);   // crisp single dot
+        if (sweepIdx >= 0 && sweepIdx < STRIP_HALF) leds[sweepIdx] = CRGB(255, 255, 255);
     } else if (comaMode) {
         // Coma: barely alive — only his temples, a slow faint blue pulse. The
         // hard idle fade keeps the rest of the tower dark.
