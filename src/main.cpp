@@ -645,15 +645,16 @@ static void edisonUpdate() {
 #define STRIP_HALF (STRIP_LEDS / 2)
 
 // A bolt climbing a tower: head position (0=base), speed, life.
-struct Bolt { float pos; float spd; bool alive; };
-static Bolt bolts[4];
+struct Bolt { float pos; float spd; bool alive; int half; };
+static Bolt bolts[8];
 
-static void spawnBolt() {
-    for (int i = 0; i < 4; i++) {
+static void spawnBolt(int half) {
+    for (int i = 0; i < 8; i++) {
         if (!bolts[i].alive) {
             bolts[i].pos = 0;                    // base of the tower
             bolts[i].spd = frand(0.6f, 1.8f);    // pixels per frame
             bolts[i].alive = true;
+            bolts[i].half = half;                // which tower this bolt is on
             return;
         }
     }
@@ -674,31 +675,39 @@ static void stripRender() {
     if (freak && !wasFreak) greenFlashUntil = now + 1000;
     wasFreak = freak;
 
-    // Fade the FIRST HALF (the one tower we render); trails/afterglow. Idle
-    // fades hard so the drifting energy reads as a compact RING, not a
-    // long-tailed comet; freak keeps a gentler fade for bolt trails.
-    fadeToBlackBy(leds, STRIP_HALF, freak ? 55 : 150);
+    // Fade both halves; trails/afterglow. Idle fades hard so the drifting
+    // energy reads as a compact RING, not a long-tailed comet; freak keeps a
+    // gentler fade for bolt trails. (Idle renders each strand independently, so
+    // both halves need fading; freak/coma/sweep render half 0 then mirror.)
+    fadeToBlackBy(leds, STRIP_LEDS, freak ? 55 : 150);
 
     if (freak) {
-        // Panic just hit: bright sparking green at the head (he jolts awake).
-        if (now < greenFlashUntil) {
-            for (int j = 0; j < 18; j++) {
-                int p = STRIP_HALF - 1 - j;   // head = far end
-                if (p >= 0 && frand(0, 1) < 0.75f) leds[p] = CRGB(80, 255, 90);
+        // Panic — rendered INDEPENDENTLY per strand so the two towers don't
+        // fire identical bolts/flashes (that looked fake). Each tower rolls its
+        // own head spark, white crack, and top flare.
+        for (int h = 0; h < 2; h++) {
+            int base = h * STRIP_HALF;
+            // Head spark: he jolts awake (purple).
+            if (now < greenFlashUntil) {
+                for (int j = 0; j < 18; j++) {
+                    int p = STRIP_HALF - 1 - j;   // head = far end
+                    if (p >= 0 && frand(0, 1) < 0.75f) leds[base + p] = CRGB(180, 0, 255);
+                }
+            }
+            // Occasional full-tower white flash — the big crack.
+            if (frand(0, 1) < 0.06f) fill_solid(leds + base, STRIP_HALF, CRGB(255, 255, 255));
+            // Bright flare at the top (nearest the creature).
+            if (frand(0, 1) < 0.18f) {
+                for (int j = 0; j < 4; j++) {
+                    int p = STRIP_HALF - 1 - j;
+                    if (p >= 0) leds[base + p] = CRGB(255, 255, 255);
+                }
             }
         }
+        // Spawn bolts into a random tower.
         if (now >= nextBolt) {
-            spawnBolt();
-            nextBolt = now + (uint32_t)frand(70, 240);
-        }
-        // Occasional full-tower white flash — the big crack.
-        if (frand(0, 1) < 0.06f) fill_solid(leds, STRIP_HALF, CRGB(255, 255, 255));
-        // Bright flare at the top (nearest the creature).
-        if (frand(0, 1) < 0.18f) {
-            for (int j = 0; j < 4; j++) {
-                int p = STRIP_HALF - 1 - j;
-                if (p >= 0) leds[p] = CRGB(255, 255, 255);
-            }
+            spawnBolt(random(2));
+            nextBolt = now + (uint32_t)frand(55, 200);
         }
     } else if (sweepMode) {
         // Calibrate: one white LED walks base -> last pixel -> back, one LED at
@@ -724,71 +733,88 @@ static void stripRender() {
             if (p >= 0) leds[p] = CRGB(0, b / 8, b);          // cold blue
         }
     } else {
-        // Idle: a tight green energy ring flows continuously up the tower to
-        // his head, looping — it never stops.
-        static float ringPos = 0;
-        static bool armed = true;                  // re-armed each loop
-        ringPos += 0.35f;                          // ~21 px/s at 60fps
-        bool hitHead = false;
-        if (ringPos >= STRIP_HALF - 1 && armed) { hitHead = true; armed = false; }
-        if (ringPos >= STRIP_HALF + 4) { ringPos = -4; armed = true; }
-        int c = (int)ringPos;
-        if (c >= 0 && c < STRIP_HALF) leds[c] = CRGB(0, 180, 30);
+        // Idle: EACH strand runs its own independent purple comet up to his
+        // head, looping — different random climb speed per tower — plus its own
+        // chance-based white overcharge flicker at that strand's temple. Both
+        // halves are rendered directly here (no mirror for idle).
+        static float ringPos[2] = {0, 0}, ringSpeed[2] = {0.6f, 0.6f};
+        static bool armed[2] = {true, true};
+        static uint32_t ringSpeedNext[2] = {0, 0};
+        static uint32_t overUntil[2] = {0, 0}, flickNext[2] = {0, 0};
+        static bool overOn[2] = {false, false}, flickLit[2] = {false, false};
+        for (int h = 0; h < 2; h++) {
+            int base = h * STRIP_HALF;
+            // Variable climb speed per strand — races and stalls, re-rolled
+            // every fraction of a second, never a constant crawl.
+            if (now >= ringSpeedNext[h]) {
+                ringSpeed[h] = frand(0.35f, 1.6f);
+                ringSpeedNext[h] = now + (uint32_t)frand(110, 450);
+            }
+            ringPos[h] += ringSpeed[h];
+            bool hitHead = false;
+            if (ringPos[h] >= STRIP_HALF - 1 && armed[h]) { hitHead = true; armed[h] = false; }
+            if (ringPos[h] >= STRIP_HALF + 4) { ringPos[h] = -4; armed[h] = true; }
+            int c = (int)ringPos[h];
+            if (c >= 0 && c < STRIP_HALF) leds[base + c] = CRGB(150, 0, 255);
 
-        // OVERCHARGE — when the ring reaches his head it has only a CHANCE to
-        // ignite a single white pixel at his temple that flickers chaotically
-        // (random speed, random on/off, random brightness) — not every pass,
-        // never a steady pulse. Layered over the still-flowing ring.
-        static uint32_t overUntil = 0, flickNext = 0;
-        static bool overOn = false, flickLit = false;
-        if (hitHead && !overOn && frand(0, 1) < 0.4f) {
-            overOn = true;
-            overUntil = now + (uint32_t)frand(500, 1900);   // random duration
-            flickNext = 0;
-        }
-        if (overOn) {
-            if (now >= flickNext) {                 // random speed + random pattern
-                flickLit = frand(0, 1) < 0.6f;
-                flickNext = now + (uint32_t)frand(15, 130);
+            // OVERCHARGE — when this strand's ring reaches his head it has only
+            // a CHANCE to ignite one white temple pixel that flickers
+            // chaotically (random speed/pattern/brightness) — not every pass.
+            if (hitHead && !overOn[h] && frand(0, 1) < 0.4f) {
+                overOn[h] = true;
+                overUntil[h] = now + (uint32_t)frand(500, 1900);
+                flickNext[h] = 0;
             }
-            if (flickLit) {                         // one white pixel at his head
-                uint8_t w = (uint8_t)frand(120, 255);
-                leds[STRIP_HALF - 1] = CRGB(w, w, w);
+            if (overOn[h]) {
+                if (now >= flickNext[h]) {
+                    flickLit[h] = frand(0, 1) < 0.6f;
+                    flickNext[h] = now + (uint32_t)frand(15, 130);
+                }
+                if (flickLit[h]) {
+                    uint8_t w = (uint8_t)frand(120, 255);
+                    leds[base + STRIP_HALF - 1] = CRGB(w, w, w);
+                }
+                if (now >= overUntil[h]) overOn[h] = false;
             }
-            if (now >= overUntil) overOn = false;
         }
         (void)nextSpark;
     }
 
-    // Advance bolts up the tower with a short trail; flare on reaching the top.
-    for (int i = 0; i < 4; i++) {
+    // Advance bolts up their own tower with a short trail; flare on reaching
+    // the top. Each bolt draws into its own half (base), so the towers differ.
+    for (int i = 0; i < 8; i++) {
         if (!bolts[i].alive) continue;
+        int base = bolts[i].half * STRIP_HALF;
         bolts[i].pos += bolts[i].spd;
         int p = (int)bolts[i].pos;
         if (p >= STRIP_HALF) {
             bolts[i].alive = false;
             for (int j = 0; j < 4; j++) {
                 int q = STRIP_HALF - 1 - j;
-                if (q >= 0) leds[q] = CRGB(255, 255, 255);  // full-white impact
+                if (q >= 0) leds[base + q] = CRGB(255, 255, 255);  // full-white impact
             }
             continue;
         }
         // Fat, bright bolt head: bright white-blue core + adjacent glow.
-        leds[p] = CRGB(230, 245, 255);
-        if (p + 1 < STRIP_HALF) leds[p + 1] = CRGB(160, 190, 255);
-        if (p - 1 >= 0) leds[p - 1] = CRGB(160, 190, 255);
-        if (p - 2 >= 0) leds[p - 2] += CRGB(60, 75, 120);  // trail
+        leds[base + p] = CRGB(230, 245, 255);
+        if (p + 1 < STRIP_HALF) leds[base + p + 1] = CRGB(160, 190, 255);
+        if (p - 1 >= 0) leds[base + p - 1] = CRGB(160, 190, 255);
+        if (p - 2 >= 0) leds[base + p - 2] += CRGB(60, 75, 120);  // trail
     }
 
-    // Mirror the rendered tower onto the second rope so both are identical.
-    for (int i = 0; i < STRIP_HALF && STRIP_HALF + i < STRIP_LEDS; i++) {
-        leds[STRIP_HALF + i] = leds[i];
+    // Mirror the rendered tower onto the second rope so both are identical —
+    // only for coma and calibrate. Idle and panic render each strand
+    // independently above, so both towers differ (no fake perfect sync).
+    if (comaMode || sweepMode) {
+        for (int i = 0; i < STRIP_HALF && STRIP_HALF + i < STRIP_LEDS; i++) {
+            leds[STRIP_HALF + i] = leds[i];
+        }
     }
 
-    // Unstable equipment: random idle GLITCH — a green spark-storm floods a
-    // whole rope. Applied AFTER the mirror so it can misfire on BOTH towers or
-    // just ONE. White sparks bias toward the start (tower connector end).
-    if (!freak) {
+    // Unstable equipment: random idle GLITCH — a green section shorts out.
+    // Applied AFTER the mirror so it can misfire on BOTH towers or just ONE.
+    // Idle only — never during calibrate (clean walker) or coma (quiet).
+    if (!freak && !sweepMode && !comaMode) {
         static uint32_t nextGlitch = 0, glitchUntil = 0, nextStrobe = 0;
         static int glitchTarget = 0;      // 0=both, 1=tower1, 2=tower2
         static int secStart = 0, secLen = 0;
@@ -818,7 +844,7 @@ static void stripRender() {
                     if (glitchTarget == 2 && half == 0) continue;
                     int base = half * STRIP_HALF;
                     for (int i = secStart; i < secStart + secLen; i++) {
-                        leds[base + i] = CRGB(0, g, g / 6);
+                        leds[base + i] = CRGB((uint8_t)(g * 3 / 4), 0, g);
                     }
                 }
             }
