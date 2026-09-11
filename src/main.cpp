@@ -30,10 +30,15 @@
 #include "config.h"
 #include "secrets.h"
 
-#ifdef STRIP_ENABLED
+#if defined(STRIP_ENABLED) || defined(CORE_STRIP_ENABLED)
 #define FASTLED_INTERNAL  // silence FastLED's version-banner pragma
 #include <FastLED.h>
+#endif
+#ifdef STRIP_ENABLED
 static CRGB leds[STRIP_LEDS];
+#endif
+#ifdef CORE_STRIP_ENABLED
+static CRGB coreLeds[CORE_LEDS];
 #endif
 
 static const uint32_t TICK_MS = 10;
@@ -850,6 +855,149 @@ static void stripRender() {
             }
         }
     }
+    FastLED.show();
+}
+#endif
+
+#ifdef CORE_STRIP_ENABLED
+// Desk "energy core": a single strand that breathes a green powering-up pulse
+// at rest, overloads bright and unstable on Galvanize, and sinks to a faint
+// slow throb in coma. Runs on board 1 alongside the meters.
+static void coreRender() {
+    static uint32_t lastFrame = 0;
+    uint32_t now = millis();
+    if (now - lastFrame < 16) return;   // ~60fps
+    lastFrame = now;
+
+#ifdef CORE_COUNT_TEST
+    // Locator: one white dot walks base -> end -> back to measure real length.
+    static int idx = 0, dir = 1; static uint32_t nxt = 0;
+    if (now >= nxt) {
+        idx += dir;
+        if (idx >= CORE_LEDS - 1) { idx = CORE_LEDS - 1; dir = -1; }
+        else if (idx <= 0)        { idx = 0;             dir = 1; }
+        nxt = now + 45;
+    }
+    fill_solid(coreLeds, CORE_LEDS, CRGB::Black);
+    coreLeds[idx] = CRGB(255, 255, 255);
+    FastLED.show();
+    return;
+#endif
+
+    if (allOff) { fill_solid(coreLeds, CORE_LEDS, CRGB::Black); FastLED.show(); return; }
+
+    // Deep electric violet, hue-locked, scaled by brightness b. Low red keeps
+    // it from washing out toward pink/white.
+    #define CORE_PURPLE(b) CRGB((uint8_t)((b) * 2 / 5), 0, (b))
+
+    if (freakingOut()) {
+        // Galvanize: raw white lightning surging through the equipment —
+        // full-bright white, strobing hard and fast, mostly lit.
+        static uint32_t flickNext = 0; static bool on = true;
+        if (now >= flickNext) {
+            on = frand(0, 1) < 0.72f;                       // erratic, mostly on
+            flickNext = now + (uint32_t)frand(10, 55);
+        }
+        fill_solid(coreLeds, CORE_LEDS, on ? CRGB(255, 255, 255) : CRGB(18, 18, 18));
+    } else if (comaMode) {
+        // Coma: faint, slow throb — barely holding a charge.
+        float ph = (now % 5000) / 5000.0f;
+        float pulse = 0.5f * (1.0f - cosf(2.0f * PI * ph));
+        uint8_t b = (uint8_t)(6 + 26 * pulse);
+        fill_solid(coreLeds, CORE_LEDS, CORE_PURPLE(b));
+    } else {
+        // Idle: CHARGING — brightness builds with an accelerating ease-in and
+        // growing instability, then discharges in a lightning strike and
+        // charges again at a randomized interval. Plus a RARE white surge.
+        static int chargePhase = 0;                 // 0 charging, 1 discharge
+        static uint32_t phaseStart = 0, chargeDur = 2600, flashNext = 0;
+        static int flashesLeft = 0; static bool flashOn = false;
+        static uint32_t whiteUntil = 0, whiteNext = 0, wFlick = 0;
+        static bool wOn = false, wInit = false;
+        if (phaseStart == 0) phaseStart = now;
+        if (!wInit) { whiteNext = now + (uint32_t)frand(20000, 55000); wInit = true; }
+        // Rare overload: the whole strand rapid-flashes white for ~1s, then a
+        // fresh charge resumes (phaseStart parked at the surge's end).
+        if (now >= whiteNext && now >= whiteUntil) {
+            whiteUntil = now + (uint32_t)frand(700, 1300);
+            whiteNext = now + (uint32_t)frand(30000, 80000);
+            wFlick = 0; wOn = true;
+            chargePhase = 0; phaseStart = whiteUntil;
+            chargeDur = (uint32_t)frand(1500, 9000);
+        }
+        if (now < whiteUntil) {
+            if (now >= wFlick) { wOn = !wOn; wFlick = now + (uint32_t)frand(20, 70); }
+            fill_solid(coreLeds, CORE_LEDS, wOn ? CRGB(255, 255, 255) : CRGB(30, 30, 30));
+        } else if (chargePhase == 0) {
+            float t = (now - phaseStart) / (float)chargeDur;   // 0..1
+            if (t >= 1.0f) {
+                chargePhase = 1;                                // begin the strike
+                flashesLeft = 3 + (int)frand(0, 6);            // a few random strikes
+                flashNext = 0; flashOn = false;
+            } else {
+                float ease = t * t;                             // accelerating build
+                float jit = frand(-0.12f, 0.12f) * ease;        // instability grows
+                int b = (int)constrain((20 + 235 * ease) * (1.0f + jit), 0.0f, 255.0f);
+                fill_solid(coreLeds, CORE_LEDS, CORE_PURPLE(b));
+                // Electric GREEN sparks over the purple charge. Held for a
+                // random interval (not re-scattered every frame) so they read
+                // as distinct erratic sparks, not uniform fuzz — bursty counts,
+                // random spots, denser as the charge climbs.
+                static int sparkPos[64], sparkN = 0;
+                static uint32_t sparkNext = 0;
+                if (now >= sparkNext) {
+                    sparkN = 2 + (int)frand(0, 46 * (0.25f + ease));
+                    if (sparkN > 64) sparkN = 64;
+                    for (int k = 0; k < sparkN; k++) sparkPos[k] = random(CORE_LEDS);
+                    sparkNext = now + (uint32_t)frand(25, 110);
+                }
+                for (int k = 0; k < sparkN; k++)
+                    coreLeds[sparkPos[k]] = (frand(0, 1) < 0.35f) ? CRGB(70, 255, 70)
+                                                                  : CRGB(0, 255, 45);
+            }
+        } else {
+            // DISCHARGE — strikes like lightning. Within one event the rhythm
+            // VARIES: mostly quick flicks, sometimes a slower, more pronounced
+            // strike, randomly ordered. Each strike is textured (per-pixel
+            // brightness jitter, not a flat block) and sometimes hits only a
+            // random chunk. No two events alike.
+            static uint8_t flashBright = 220;
+            if (now >= flashNext) {
+                flashOn = !flashOn;
+                if (flashOn) {
+                    if (frand(0, 1) < 0.30f) {                   // slow, pronounced
+                        flashNext = now + (uint32_t)frand(70, 170);
+                        flashBright = (uint8_t)frand(215, 255);
+                    } else {                                     // quick flick
+                        flashNext = now + (uint32_t)frand(12, 45);
+                        flashBright = (uint8_t)frand(150, 235);
+                    }
+                } else {
+                    flashNext = now + (uint32_t)frand(15, 120);  // gap between strikes
+                    if (--flashesLeft <= 0) {
+                        chargePhase = 0; phaseStart = now;
+                        chargeDur = (uint32_t)frand(1500, 9000); // widely random interval
+                    }
+                }
+            }
+            fill_solid(coreLeds, CORE_LEDS, CRGB(0, 10, 0));      // dark base
+            if (flashOn) {
+                int a = 0, b = CORE_LEDS;
+                float r = frand(0, 1);
+                if (r < 0.55f) {                                           // misfire: random part
+                    a = random(CORE_LEDS);
+                    b = a + (int)frand(CORE_LEDS * 0.08f, CORE_LEDS * 0.6f);
+                } else if (r < 0.70f) { a = 0; b = CORE_LEDS / 2; }        // first side
+                else if (r < 0.83f)   { a = CORE_LEDS / 2; b = CORE_LEDS; }// second side
+                                                                          // else full strand
+                for (int i = a; i < b && i < CORE_LEDS; i++) {    // textured, non-uniform
+                    uint8_t g = (uint8_t)(flashBright * frand(0.4f, 1.0f));
+                    coreLeds[i] = CRGB(g / 4, g, g / 4);
+                }
+            }
+        }
+    }
+    #undef CORE_PURPLE
     FastLED.show();
 }
 #endif
@@ -1874,6 +2022,12 @@ void setup() {
     FastLED.setMaxPowerInVoltsAndMilliamps(5, STRIP_MAX_MA);  // can't exceed supply
     FastLED.clear(true);
 #endif
+#ifdef CORE_STRIP_ENABLED
+    // Desk energy-core strand on its own data pin + separate 5V supply.
+    FastLED.addLeds<WS2812B, CORE_PIN, GRB>(coreLeds, CORE_LEDS);
+    FastLED.setMaxPowerInVoltsAndMilliamps(5, CORE_MAX_MA);
+    FastLED.clear(true);
+#endif
 
     // Serve HTTP on core 0 as a dedicated task — requests no longer take
     // turns with the 100Hz animation loop (which owns core 1). Cures the
@@ -1894,6 +2048,9 @@ void loop() {
 
 #ifdef STRIP_ENABLED
     stripRender();
+#endif
+#ifdef CORE_STRIP_ENABLED
+    coreRender();
 #endif
 
 #ifdef TRYME_PIN

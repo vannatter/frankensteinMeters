@@ -165,6 +165,19 @@ static const MeterProfile METERS[METER_COUNT] = {
 // (tower) and flares at the far end (his head) — no flip needed.
 #endif
 
+#if BOARD_ID == 1
+// Desk "energy core" — a single addressable WS2812 strand in the drawer that
+// breathes a green powering-up pulse, surges on Galvanize, dims in coma. Its
+// own 5V/10A supply; only DATA (D4) + a common ground go to the board.
+// CORE_LEDS can be a bit generous (the pulse is uniform, so extra pixels past
+// the real end just do nothing); flip CORE_COUNT_TEST on to walk a locator dot.
+#define CORE_STRIP_ENABLED
+#define CORE_PIN 4
+#define CORE_LEDS 300       // strand is ~2× the first guess; bump to light it all
+#define CORE_MAX_MA 9000    // under the 5V/10A brick (FastLED caps brightness)
+// #define CORE_COUNT_TEST  // uncomment: walk a white dot to find real length
+#endif
+
 // Freakout strobe light: random on/off times (ms) so it reads as arcing
 // electricity rather than a metronome strobe.
 #define STROBE_ON_MS_MIN 30.0f
