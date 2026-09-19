@@ -576,7 +576,9 @@ static void startFreakout(long seconds) {
     freakoutUntil = seconds <= 0 ? UINT32_MAX : millis() + (uint32_t)seconds * 1000;
     logMsg(seconds <= 0 ? String("FREAKOUT! (until calm)")
                         : "FREAKOUT! (" + String(seconds) + "s)");
-    pulseTryme();
+#ifdef TRYME_ON_FREAKOUT
+    pulseTryme();          // auto-fire the animatronic on freakout (opt-in)
+#endif
 #ifdef AUTO_FREAKOUT_MS
     scheduleAutoFreak();   // any trigger — manual, forwarded, or auto — resets it
 #endif
