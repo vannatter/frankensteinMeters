@@ -193,6 +193,17 @@ static const MeterProfile METERS[METER_COUNT] = {
 #define FLOOD_STRIP_ENABLED
 #define FLOOD_PIN 19
 #define FLOOD_LEDS 8
+
+// DY-SV5W MP3 module (UART2) — the lab's voice. Idle: a mad-scientist buzz that
+// loops; freakout: a frantic clip. ESP TX (D17) -> module data-in (RX), common
+// ground, module on 5V with a speaker on SPK+/-. Put the two MP3s on the SD as
+// 00001.mp3 (idle loop) and 00002.mp3 (freakout). Set the module to UART mode.
+#define AUDIO_ENABLED
+#define AUDIO_RX_PIN 16          // module TX -> ESP (optional, for status)
+#define AUDIO_TX_PIN 17          // ESP TX -> module data-in (the wire that matters)
+#define AUDIO_VOLUME 22          // 0-30
+#define AUDIO_IDLE_TRACK 1
+#define AUDIO_FREAK_TRACK 2
 #endif
 
 // Freakout strobe light: random on/off times (ms) so it reads as arcing

@@ -1046,6 +1046,50 @@ static void floodRender() {
 }
 #endif
 
+#ifdef AUDIO_ENABLED
+// DY-SV5W MP3 module over UART2. Frame: AA CMD LEN [DATA...] SUM, where SUM is
+// the low byte of the sum of all preceding bytes. Tracks are the files on the
+// SD by index (00001.mp3 = 1, ...). Command bytes are the standard DY set —
+// keep the module's manual handy if anything needs tweaking (loop-mode value
+// especially varies a little across DY variants).
+static void dySend(const uint8_t* d, size_t n) {
+    uint16_t sum = 0;
+    for (size_t i = 0; i < n; i++) { Serial2.write(d[i]); sum += d[i]; }
+    Serial2.write((uint8_t)(sum & 0xFF));
+}
+static void dyVolume(uint8_t v) {                     // 0..30
+    uint8_t c[] = {0xAA, 0x13, 0x01, v}; dySend(c, sizeof(c));
+}
+static void dyLoopMode(uint8_t m) {                   // 1 = single-track loop (repeat)
+    uint8_t c[] = {0xAA, 0x18, 0x01, m}; dySend(c, sizeof(c));
+}
+static void dyPlayTrack(uint16_t n) {                 // play the Nth file (loops in single mode)
+    uint8_t c[] = {0xAA, 0x07, 0x02, (uint8_t)(n >> 8), (uint8_t)(n & 0xFF)};
+    dySend(c, sizeof(c));
+}
+static void dyStop() { uint8_t c[] = {0xAA, 0x04, 0x00}; dySend(c, sizeof(c)); }
+
+// The lab's voice: idle buzz loop, frantic clip during freakout, silent when
+// extinguished. Switches only on state change so it doesn't restart every frame.
+static void audioUpdate() {
+    static bool inited = false;
+    static int cur = -1;                              // -1 none, 0 off, 1 idle, 2 freak
+    uint32_t now = millis();
+    if (!inited) {
+        if (now < 2500) return;                       // let the module boot + mount the SD
+        dyVolume(AUDIO_VOLUME);
+        dyLoopMode(1);                                // repeat whichever track is playing
+        inited = true;
+    }
+    int want = allOff ? 0 : (freakingOut() ? 2 : 1);
+    if (want == cur) return;
+    cur = want;
+    if (want == 0)      dyStop();
+    else if (want == 2) dyPlayTrack(AUDIO_FREAK_TRACK);
+    else                dyPlayTrack(AUDIO_IDLE_TRACK);
+}
+#endif
+
 static void sendToBoard(const char* ip, const String& path) {
     HTTPClient http;
     String url = "http://" + String(ip) + path;
@@ -2043,6 +2087,9 @@ void setup() {
 #ifdef KNIFE_PIN
     pinMode(KNIFE_PIN, INPUT_PULLUP);   // lab throw-switch, switch-to-GND
 #endif
+#ifdef AUDIO_ENABLED
+    Serial2.begin(9600, SERIAL_8N1, AUDIO_RX_PIN, AUDIO_TX_PIN);  // DY-SV5W MP3 module
+#endif
     prefs.begin("franken");
     for (int i = 0; i < METER_COUNT; i++) {
         meters[i].begin(METERS[i], i);
@@ -2152,6 +2199,9 @@ void setup() {
 #endif
 #ifdef KNIFE_PIN
             knifeCheck();
+#endif
+#ifdef AUDIO_ENABLED
+            audioUpdate();
 #endif
             vTaskDelay(1);
         }
