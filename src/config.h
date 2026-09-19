@@ -176,6 +176,12 @@ static const MeterProfile METERS[METER_COUNT] = {
 #define CORE_LEDS 300       // strand is ~2× the first guess; bump to light it all
 #define CORE_MAX_MA 9000    // under the 5V/10A brick (FastLED caps brightness)
 // #define CORE_COUNT_TEST  // uncomment: walk a white dot to find real length
+
+// The lab throw-switch (knife switch) on D18 — an INPUT wired switch-to-GND
+// using the internal pull-up (no resistor). Idles HIGH; throwing the knife
+// (closing to ground) reads LOW and fires a lab-wide Galvanize. Not a boot
+// strapping pin, so it's safe even if the knife is closed at power-on.
+#define KNIFE_PIN 18
 #endif
 
 // Freakout strobe light: random on/off times (ms) so it reads as arcing
@@ -251,6 +257,14 @@ static const MeterProfile METERS[METER_COUNT] = {
 // How long a freakout lasts if the request doesn't say (seconds).
 // 20s covers the animatronic's full Try-Me animation.
 #define FREAKOUT_DEFAULT_S 20
+
+// Attract mode: if nothing has triggered a freakout for this long, the lab
+// galvanizes itself so it never sits dead too long. 0 disables. Each board runs
+// its own jittered timer; whichever fires first fans out to the herd (which
+// resets everyone), so they stay coordinated and it survives any board being
+// offline. Any trigger — manual or auto — restarts the clock.
+#define AUTO_FREAKOUT_MS 300000    // 5 minutes
+#define AUTO_FREAKOUT_JITTER_MS 45000
 
 // ---------------------------------------------------------------------------
 // Multi-board setup. BOARD_ID comes from platformio.ini (board1 env = 1,
