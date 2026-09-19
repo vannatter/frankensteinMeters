@@ -1100,24 +1100,21 @@ static void knifeCheck() {
     int raw = digitalRead(KNIFE_PIN);
     uint32_t now = millis();
     if (raw != lastRaw) { lastRaw = raw; lastChange = now; }
-    if (now - lastChange < 40) return;              // debounce: wait for a stable read
+    if (now - lastChange < 25) return;              // debounce: wait for a stable read
     bool thrown = (raw == LOW);
     if (thrown && armed) {
         armed = false;
         logMsg("KNIFE THROWN — it's alive!");
         startFreakout(FREAKOUT_DEFAULT_S);
-        if (WiFi.status() == WL_CONNECTED) {
+        // Fan out — board 2 gets freakout + Try-Me in ONE call (?tryme=1) so the
+        // prop fires a round-trip sooner; other boards just freak out. The knife
+        // is the only trigger that fires the animatronic.
+        if (WiFi.status() == WL_CONNECTED)
             for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
                 if (ALL_BOARDS[i].id == BOARD_ID) continue;
-                sendToBoard(ALL_BOARDS[i].ip, "/freakout");
+                sendToBoard(ALL_BOARDS[i].ip,
+                            ALL_BOARDS[i].id == 2 ? "/freakout?tryme=1" : "/freakout");
             }
-            // The knife is the deliberate "it's alive" moment — fire the
-            // animatronic too (board 2's Try-Me), even though attract mode and
-            // the dashboard Galvanize stay Try-Me-free.
-            for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
-                if (ALL_BOARDS[i].id == 2) { sendToBoard(ALL_BOARDS[i].ip, "/tryme"); break; }
-            }
-        }
     } else if (!thrown && !armed) {
         armed = true;                               // knife reset (opened) — re-arm
     }
@@ -1373,6 +1370,7 @@ static void handleFreakout() {
     allOff = false;
     allOn = false;
     startFreakout(seconds);
+    if (server.hasArg("tryme")) pulseTryme();   // knife sends this to fire the prop
     forwardToPeers(path.c_str());
     server.send(200, "application/json", "{\"mode\":\"freakout\"}\n");
 }
