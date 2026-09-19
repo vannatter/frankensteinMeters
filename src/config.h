@@ -131,10 +131,12 @@ static const MeterProfile METERS[METER_COUNT] = {
 
 #if BOARD_ID == 2
 // Try-Me trigger for the animatronic: GPIO 32 drives an optocoupler (or
-// relay) that momentarily "presses" the prop's 3.5mm Try-Me button whenever
-// a freakout starts. See README wiring notes.
+// relay) that momentarily "presses" the prop's 3.5mm Try-Me button. The manual
+// /tryme endpoint always works; auto-firing it on every freakout is opt-in
+// (uncomment TRYME_ON_FREAKOUT) — kept OFF for now, it was too much.
 #define TRYME_PIN 32
 #define TRYME_PULSE_MS 500
+// #define TRYME_ON_FREAKOUT
 
 // Edison bulb via a Shelly Dimmer G4 (mains, E12 socket) on the network.
 // Board 2 drives it over HTTP to match the current mode — candle flicker at
