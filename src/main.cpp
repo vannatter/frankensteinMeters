@@ -563,11 +563,23 @@ static bool freakingOut() {
     return true;
 }
 
+#ifdef AUTO_FREAKOUT_MS
+// Attract mode: next time this board may auto-galvanize (jittered per board).
+static uint32_t autoFreakTarget = 0;
+static void scheduleAutoFreak() {
+    autoFreakTarget = millis() + AUTO_FREAKOUT_MS +
+                      (uint32_t)random(0, AUTO_FREAKOUT_JITTER_MS);
+}
+#endif
+
 static void startFreakout(long seconds) {
     freakoutUntil = seconds <= 0 ? UINT32_MAX : millis() + (uint32_t)seconds * 1000;
     logMsg(seconds <= 0 ? String("FREAKOUT! (until calm)")
                         : "FREAKOUT! (" + String(seconds) + "s)");
     pulseTryme();
+#ifdef AUTO_FREAKOUT_MS
+    scheduleAutoFreak();   // any trigger — manual, forwarded, or auto — resets it
+#endif
 }
 
 #ifdef SHELLY_ENABLED
@@ -1023,6 +1035,55 @@ static void forwardToPeers(const char* path) {
         sendToBoard(ALL_BOARDS[i].ip, path);
     }
 }
+
+#ifdef AUTO_FREAKOUT_MS
+// Attract mode: if the clock has run out and the lab is just idling (not
+// already freaking, and not in a deliberate coma/calibrate/extinguished state),
+// galvanize and fan the trigger out to the herd. Call from the HTTP task so the
+// peer requests never stall the LED render. The first board to fire resets
+// everyone (each /freakout reschedules the clock), keeping them coordinated.
+static void maybeAutoFreak() {
+    if (autoFreakTarget == 0) { scheduleAutoFreak(); return; }
+    if (freakingOut() || comaMode || sweepMode || allOff) return;
+    if ((int32_t)(millis() - autoFreakTarget) < 0) return;
+    logMsg("attract mode: auto-galvanize");
+    startFreakout(FREAKOUT_DEFAULT_S);        // reschedules autoFreakTarget
+    if (WiFi.status() == WL_CONNECTED)
+        for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
+            if (ALL_BOARDS[i].id == BOARD_ID) continue;
+            sendToBoard(ALL_BOARDS[i].ip, "/freakout");
+        }
+}
+#endif
+
+#ifdef KNIFE_PIN
+// The lab throw-switch: idles HIGH (internal pull-up), reads LOW when thrown.
+// Debounced + edge-triggered — one Galvanize per throw, re-armed when reset —
+// and fanned out to the herd (so board 2's Try-Me fires too). Called from the
+// HTTP task so the peer requests never stall the LED render.
+static void knifeCheck() {
+    static bool armed = true;
+    static int lastRaw = HIGH;
+    static uint32_t lastChange = 0;
+    int raw = digitalRead(KNIFE_PIN);
+    uint32_t now = millis();
+    if (raw != lastRaw) { lastRaw = raw; lastChange = now; }
+    if (now - lastChange < 40) return;              // debounce: wait for a stable read
+    bool thrown = (raw == LOW);
+    if (thrown && armed) {
+        armed = false;
+        logMsg("KNIFE THROWN — it's alive!");
+        startFreakout(FREAKOUT_DEFAULT_S);
+        if (WiFi.status() == WL_CONNECTED)
+            for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
+                if (ALL_BOARDS[i].id == BOARD_ID) continue;
+                sendToBoard(ALL_BOARDS[i].ip, "/freakout");
+            }
+    } else if (!thrown && !armed) {
+        armed = true;                               // knife reset (opened) — re-arm
+    }
+}
+#endif
 
 // If the request carried ?board=N and N is some other board, relay the
 // command there instead of acting locally. Returns true when relayed.
@@ -1941,6 +2002,10 @@ static void connectWiFi() {
 
 void setup() {
     Serial.begin(115200);
+    randomSeed(esp_random());   // hardware RNG: per-board jitter + livelier effects
+#ifdef KNIFE_PIN
+    pinMode(KNIFE_PIN, INPUT_PULLUP);   // lab throw-switch, switch-to-GND
+#endif
     prefs.begin("franken");
     for (int i = 0; i < METER_COUNT; i++) {
         meters[i].begin(METERS[i], i);
@@ -2038,6 +2103,12 @@ void setup() {
             server.handleClient();
 #ifdef SHELLY_ENABLED
             edisonUpdate();
+#endif
+#ifdef AUTO_FREAKOUT_MS
+            maybeAutoFreak();
+#endif
+#ifdef KNIFE_PIN
+            knifeCheck();
 #endif
             vTaskDelay(1);
         }
