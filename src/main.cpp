@@ -30,7 +30,7 @@
 #include "config.h"
 #include "secrets.h"
 
-#if defined(STRIP_ENABLED) || defined(CORE_STRIP_ENABLED)
+#if defined(STRIP_ENABLED) || defined(CORE_STRIP_ENABLED) || defined(FLOOD_STRIP_ENABLED)
 #define FASTLED_INTERNAL  // silence FastLED's version-banner pragma
 #include <FastLED.h>
 #endif
@@ -39,6 +39,9 @@ static CRGB leds[STRIP_LEDS];
 #endif
 #ifdef CORE_STRIP_ENABLED
 static CRGB coreLeds[CORE_LEDS];
+#endif
+#ifdef FLOOD_STRIP_ENABLED
+static CRGB floodLeds[FLOOD_LEDS];
 #endif
 
 static const uint32_t TICK_MS = 10;
@@ -1016,6 +1019,33 @@ static void coreRender() {
 }
 #endif
 
+#ifdef FLOOD_STRIP_ENABLED
+// WS2811 flood light: subtle green wash at idle, white lightning strobe on
+// freakout, faint green ember in coma. Fills its buffer only — the show() in
+// coreRender() (called right after) pushes it, so there's one show per frame.
+static void floodRender() {
+    uint32_t now = millis();
+    if (allOff) { fill_solid(floodLeds, FLOOD_LEDS, CRGB::Black); return; }
+    if (freakingOut()) {
+        // Lightning strobe — erratic bright white flashes.
+        static uint32_t fNext = 0; static bool on = false;
+        if (now >= fNext) {
+            on = frand(0, 1) < 0.55f;
+            fNext = now + (uint32_t)frand(20, 95);
+        }
+        fill_solid(floodLeds, FLOOD_LEDS, on ? CRGB(255, 255, 255) : CRGB(0, 0, 0));
+    } else if (comaMode) {
+        fill_solid(floodLeds, FLOOD_LEDS, CRGB(0, 12, 0));    // faint green ember
+    } else {
+        // Idle: a subtle green wash that gently drifts in brightness.
+        float ph = (now % 6000) / 6000.0f;
+        float pulse = 0.5f * (1.0f - cosf(2.0f * PI * ph));   // slow 0..1
+        uint8_t g = (uint8_t)(22 + 55 * pulse);               // dim, subtle green
+        fill_solid(floodLeds, FLOOD_LEDS, CRGB(0, g, 0));
+    }
+}
+#endif
+
 static void sendToBoard(const char* ip, const String& path) {
     HTTPClient http;
     String url = "http://" + String(ip) + path;
@@ -1076,11 +1106,18 @@ static void knifeCheck() {
         armed = false;
         logMsg("KNIFE THROWN — it's alive!");
         startFreakout(FREAKOUT_DEFAULT_S);
-        if (WiFi.status() == WL_CONNECTED)
+        if (WiFi.status() == WL_CONNECTED) {
             for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
                 if (ALL_BOARDS[i].id == BOARD_ID) continue;
                 sendToBoard(ALL_BOARDS[i].ip, "/freakout");
             }
+            // The knife is the deliberate "it's alive" moment — fire the
+            // animatronic too (board 2's Try-Me), even though attract mode and
+            // the dashboard Galvanize stay Try-Me-free.
+            for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
+                if (ALL_BOARDS[i].id == 2) { sendToBoard(ALL_BOARDS[i].ip, "/tryme"); break; }
+            }
+        }
     } else if (!thrown && !armed) {
         armed = true;                               // knife reset (opened) — re-arm
     }
@@ -2095,6 +2132,12 @@ void setup() {
     FastLED.setMaxPowerInVoltsAndMilliamps(5, CORE_MAX_MA);
     FastLED.clear(true);
 #endif
+#ifdef FLOOD_STRIP_ENABLED
+    // WS2811 flood light on its own data pin + external 12-24V supply. RGB order
+    // (swap if colors come out wrong); externally powered, so no power cap here.
+    FastLED.addLeds<WS2811, FLOOD_PIN, RGB>(floodLeds, FLOOD_LEDS);
+    FastLED.clear(true);
+#endif
 
     // Serve HTTP on core 0 as a dedicated task — requests no longer take
     // turns with the 100Hz animation loop (which owns core 1). Cures the
@@ -2121,6 +2164,9 @@ void loop() {
 
 #ifdef STRIP_ENABLED
     stripRender();
+#endif
+#ifdef FLOOD_STRIP_ENABLED
+    floodRender();      // fills its buffer; coreRender's show() pushes it
 #endif
 #ifdef CORE_STRIP_ENABLED
     coreRender();

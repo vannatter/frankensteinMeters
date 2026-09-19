@@ -184,6 +184,15 @@ static const MeterProfile METERS[METER_COUNT] = {
 // (closing to ground) reads LOW and fires a lab-wide Galvanize. Not a boot
 // strapping pin, so it's safe even if the knife is closed at power-on.
 #define KNIFE_PIN 18
+
+// WS2811 RGB pixel flood light (DC 12-24V, its OWN external supply). Only DATA
+// (D19, via a ~330Ω series resistor) and a common ground go to the board.
+// Subtle green at idle, white lightning strobe on freakout. FLOOD_LEDS can be
+// generous — the effect is uniform, so extra pixels past the real node count
+// just do nothing.
+#define FLOOD_STRIP_ENABLED
+#define FLOOD_PIN 19
+#define FLOOD_LEDS 8
 #endif
 
 // Freakout strobe light: random on/off times (ms) so it reads as arcing
