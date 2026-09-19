@@ -199,8 +199,8 @@ static const MeterProfile METERS[METER_COUNT] = {
 // ground, module on 5V with a speaker on SPK+/-. Put the two MP3s on the SD as
 // 00001.mp3 (idle loop) and 00002.mp3 (freakout). Set the module to UART mode.
 #define AUDIO_ENABLED
-#define AUDIO_RX_PIN 16          // module TX -> ESP (optional, for status)
-#define AUDIO_TX_PIN 17          // ESP TX -> module data-in (the wire that matters)
+#define AUDIO_RX_PIN 16          // module TX -> ESP (optional, for status; unused)
+#define AUDIO_TX_PIN 21          // ESP TX -> module data-in/RX (the wire that matters)
 #define AUDIO_VOLUME 22          // 0-30
 #define AUDIO_IDLE_TRACK 1
 #define AUDIO_FREAK_TRACK 2
