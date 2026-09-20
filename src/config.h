@@ -202,8 +202,11 @@ static const MeterProfile METERS[METER_COUNT] = {
 #define AUDIO_RX_PIN 16          // module TX -> ESP (optional, for status; unused)
 #define AUDIO_TX_PIN 21          // ESP TX -> module data-in/RX (the wire that matters)
 #define AUDIO_VOLUME 22          // 0-30
-#define AUDIO_IDLE_TRACK 1
-#define AUDIO_FREAK_TRACK 2
+// NOTE track offset: macOS always writes a hidden .Spotlight-V100 folder as the
+// FIRST directory entry on a FAT card, and the DY module counts it as track 1 —
+// so a Mac-prepped card has 00001.mp3 at index 2 and 00002.wav at index 3.
+#define AUDIO_IDLE_TRACK 2       // 00001.mp3 (idle buzz)
+#define AUDIO_FREAK_TRACK 3      // 00002.wav (frantic)
 #endif
 
 // Freakout strobe light: random on/off times (ms) so it reads as arcing
