@@ -1020,29 +1020,75 @@ static void coreRender() {
 #endif
 
 #ifdef FLOOD_STRIP_ENABLED
-// WS2811 flood light: subtle green wash at idle, white lightning strobe on
-// freakout, faint green ember in coma. Fills its buffer only — the show() in
-// coreRender() (called right after) pushes it, so there's one show per frame.
-static void floodRender() {
+// WS2811 flood light. Color + pattern for calm and freakout are set from the
+// dashboard and persisted. Patterns: 0 steady, 1 breathe, 2 flicker, 3 strobe,
+// 4 off. Defaults reproduce the original look (green breathe / white strobe).
+static uint8_t floodCalmR = 0, floodCalmG = 180, floodCalmB = 0, floodCalmPat = 1;
+static uint8_t floodFreakR = 255, floodFreakG = 255, floodFreakB = 255, floodFreakPat = 3;
+
+// Paint the whole flood with one pattern of one color into its buffer.
+static void floodPaint(uint8_t r, uint8_t g, uint8_t b, uint8_t pat) {
     uint32_t now = millis();
-    if (allOff) { fill_solid(floodLeds, FLOOD_LEDS, CRGB::Black); return; }
-    if (freakingOut()) {
-        // Lightning strobe — erratic bright white flashes.
-        static uint32_t fNext = 0; static bool on = false;
-        if (now >= fNext) {
-            on = frand(0, 1) < 0.55f;
-            fNext = now + (uint32_t)frand(20, 95);
+    switch (pat) {
+        case 1: {  // breathe — slow brightness drift
+            float ph = (now % 6000) / 6000.0f;
+            float s = 0.15f + 0.85f * (0.5f * (1.0f - cosf(2.0f * PI * ph)));
+            fill_solid(floodLeds, FLOOD_LEDS, CRGB(r * s, g * s, b * s));
+            break;
         }
-        fill_solid(floodLeds, FLOOD_LEDS, on ? CRGB(255, 255, 255) : CRGB(0, 0, 0));
-    } else if (comaMode) {
-        fill_solid(floodLeds, FLOOD_LEDS, CRGB(0, 12, 0));    // faint green ember
-    } else {
-        // Idle: a subtle green wash that gently drifts in brightness.
-        float ph = (now % 6000) / 6000.0f;
-        float pulse = 0.5f * (1.0f - cosf(2.0f * PI * ph));   // slow 0..1
-        uint8_t g = (uint8_t)(22 + 55 * pulse);               // dim, subtle green
-        fill_solid(floodLeds, FLOOD_LEDS, CRGB(0, g, 0));
+        case 2: {  // flicker — candle-like random dips
+            static uint32_t fn = 0; static float lv = 1.0f;
+            if (now >= fn) { lv = frand(0.35f, 1.0f); fn = now + (uint32_t)frand(40, 170); }
+            fill_solid(floodLeds, FLOOD_LEDS, CRGB(r * lv, g * lv, b * lv));
+            break;
+        }
+        case 3: {  // strobe — erratic hard on/off
+            static uint32_t sn = 0; static bool on = false;
+            if (now >= sn) { on = frand(0, 1) < 0.55f; sn = now + (uint32_t)frand(20, 95); }
+            fill_solid(floodLeds, FLOOD_LEDS, on ? CRGB(r, g, b) : CRGB::Black);
+            break;
+        }
+        case 4:    // off
+            fill_solid(floodLeds, FLOOD_LEDS, CRGB::Black);
+            break;
+        default:   // 0 steady
+            fill_solid(floodLeds, FLOOD_LEDS, CRGB(r, g, b));
+            break;
     }
+}
+
+// Fills its buffer only — coreRender()'s show() (called right after) pushes it.
+static void floodRender() {
+    if (allOff) { fill_solid(floodLeds, FLOOD_LEDS, CRGB::Black); return; }
+    if (freakingOut())
+        floodPaint(floodFreakR, floodFreakG, floodFreakB, floodFreakPat);
+    else if (comaMode)  // faint steady wash of the calm color
+        floodPaint(floodCalmR / 6, floodCalmG / 6, floodCalmB / 6, 0);
+    else
+        floodPaint(floodCalmR, floodCalmG, floodCalmB, floodCalmPat);
+}
+
+static uint32_t floodParseHex(const String& s) {
+    String h = s; if (h.startsWith("#")) h = h.substring(1);
+    return (uint32_t)strtol(h.c_str(), nullptr, 16);
+}
+static void handleFloodGet() {
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+        "{\"cc\":\"%02X%02X%02X\",\"cp\":%u,\"fc\":\"%02X%02X%02X\",\"fp\":%u}\n",
+        floodCalmR, floodCalmG, floodCalmB, floodCalmPat,
+        floodFreakR, floodFreakG, floodFreakB, floodFreakPat);
+    server.send(200, "application/json", buf);
+}
+static void handleFloodSet() {
+    if (server.hasArg("cc")) { uint32_t c = floodParseHex(server.arg("cc"));
+        floodCalmR = c >> 16; floodCalmG = c >> 8; floodCalmB = c; prefs.putUInt("fcClr", c); }
+    if (server.hasArg("cp")) { floodCalmPat = server.arg("cp").toInt(); prefs.putUChar("fcPat", floodCalmPat); }
+    if (server.hasArg("fc")) { uint32_t c = floodParseHex(server.arg("fc"));
+        floodFreakR = c >> 16; floodFreakG = c >> 8; floodFreakB = c; prefs.putUInt("ffClr", c); }
+    if (server.hasArg("fp")) { floodFreakPat = server.arg("fp").toInt(); prefs.putUChar("ffPat", floodFreakPat); }
+    logMsg("flood settings updated");
+    handleFloodGet();
 }
 #endif
 
@@ -1622,6 +1668,16 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <input type="range" id="edsl" min="0" max="100" value="10" style="flex:1;accent-color:#d9a13d" oninput="edLive(this.value)">
 <b id="edslv" style="width:3rem;text-align:right;font-size:.8rem">10%</b></div></div>
 <div class="orn">&#10087;</div>
+<div class="card"><label>The Arc-Flood</label>
+<div style="display:flex;gap:.5rem;align-items:center;margin-top:.45rem">
+<span class="mname" style="flex:1">&#9889; CALM</span>
+<input type="color" id="fcc" onchange="floodSave()" style="width:2.6rem;height:1.9rem;background:none;border:0;padding:0">
+<select id="fcp" onchange="floodSave()"><option value="0">steady</option><option value="1">breathe</option><option value="2">flicker</option><option value="3">strobe</option><option value="4">off</option></select></div>
+<div style="display:flex;gap:.5rem;align-items:center;margin-top:.45rem">
+<span class="mname" style="flex:1">&#128165; FREAKOUT</span>
+<input type="color" id="ffc" onchange="floodSave()" style="width:2.6rem;height:1.9rem;background:none;border:0;padding:0">
+<select id="ffp" onchange="floodSave()"><option value="0">steady</option><option value="1">breathe</option><option value="2">flicker</option><option value="3">strobe</option><option value="4">off</option></select></div></div>
+<div class="orn">&#10087;</div>
 <div class="card"><label id="instlabel">The Instruments</label><div id="meters"></div></div>
 <div class="orn mobile">&#10087;</div>
 </div><div class="colR">
@@ -1655,7 +1711,19 @@ async function loadHerd(){
    op.value=n;op.textContent='Board '+n+' (.'+o+')';
    t.appendChild(op);});
  }catch(e){}
+ floodLoad();
  refresh();}
+// The Arc-Flood lives on board 1; find its full url from the herd roster and
+// load/save its calm+freakout color & pattern to /floodget /floodset.
+function floodURL(){const b=HERD.find(x=>x[0]==1);return b?b[2]:'';}
+async function floodLoad(){const u=floodURL();if(!u)return;
+ try{const s=await (await fetch(u+'/floodget')).json();
+  document.getElementById('fcc').value='#'+s.cc;document.getElementById('fcp').value=s.cp;
+  document.getElementById('ffc').value='#'+s.fc;document.getElementById('ffp').value=s.fp;}catch(e){}}
+function floodSave(){const u=floodURL();if(!u)return;
+ const q='?cc='+document.getElementById('fcc').value.slice(1)+'&cp='+document.getElementById('fcp').value
+        +'&fc='+document.getElementById('ffc').value.slice(1)+'&fp='+document.getElementById('ffp').value;
+ fetch(u+'/floodset'+q).catch(()=>{});}
 async function herdCheck(){
  const parts=await Promise.all(HERD.map(async([n,o,u])=>{
   try{
@@ -2015,7 +2083,7 @@ async function refresh(){try{
  // shows THAT board's channels and sends changes to it.
  const t=document.getElementById('tgt').value;
  const tb=HERD.find(x=>x[0]==t);
- curBase=(t==='all'||+t===s.board||!tb)?'':PREFIX+tb[1];
+ curBase=(t==='all'||+t===s.board||!tb)?'':tb[2];
  let ms=s.meters,mb=s.board;
  curIdent=s.ident||0;
  if(curBase){try{const ts=await (await fetch(curBase+'/status')).json();
@@ -2091,6 +2159,15 @@ void setup() {
     Serial2.begin(9600, SERIAL_8N1, AUDIO_RX_PIN, AUDIO_TX_PIN);  // DY-SV5W MP3 module
 #endif
     prefs.begin("franken");
+#ifdef FLOOD_STRIP_ENABLED
+    {   uint32_t c = prefs.getUInt("fcClr", 0x00B400);
+        floodCalmR = c >> 16; floodCalmG = c >> 8; floodCalmB = c;
+        floodCalmPat = prefs.getUChar("fcPat", 1);
+        uint32_t f = prefs.getUInt("ffClr", 0xFFFFFF);
+        floodFreakR = f >> 16; floodFreakG = f >> 8; floodFreakB = f;
+        floodFreakPat = prefs.getUChar("ffPat", 3);
+    }
+#endif
     for (int i = 0; i < METER_COUNT; i++) {
         meters[i].begin(METERS[i], i);
         // Default rhythm: on-on-off. Overridden by anything saved in flash.
@@ -2123,6 +2200,10 @@ void setup() {
     server.on("/identify", handleIdentify);
     server.on("/live", handleLive);
     server.on("/herd", handleHerd);
+#ifdef FLOOD_STRIP_ENABLED
+    server.on("/floodget", handleFloodGet);
+    server.on("/floodset", handleFloodSet);
+#endif
 #ifdef SHELLY_ENABLED
     // /edison?b=NN pins the bulb to a brightness for testing; /edison?b=-1
     // (or no arg) returns it to auto mode-following.
