@@ -1,0 +1,14 @@
+[Unit]
+Description=Frankenstein lab sound box
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+# Replace USERNAME with the account you set in Raspberry Pi Imager.
+ExecStart=/usr/bin/python3 /home/USERNAME/franken/franken_sound.py
+Restart=always
+RestartSec=3
+User=USERNAME
+
+[Install]
+WantedBy=multi-user.target
