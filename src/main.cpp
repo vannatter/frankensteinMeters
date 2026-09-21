@@ -1130,9 +1130,14 @@ static void audioUpdate() {
     int want = allOff ? 0 : (freakingOut() ? 2 : 1);
     if (want == cur) return;
     cur = want;
-    if (want == 0)      dyStop();
-    else if (want == 2) dyPlayTrack(AUDIO_FREAK_TRACK);
-    else                dyPlayTrack(AUDIO_IDLE_TRACK);
+    // STOP first, then play — the DY module finishes the current track before
+    // acting on a new "play" otherwise, so without this the frantic clip only
+    // fires ~22s late (after the idle buzz ends). Stop forces an immediate cut.
+    dyStop();
+    delay(30);                                        // let the module register the stop
+    if (want == 2)      { dyVolume(AUDIO_FREAK_VOLUME); dyPlayTrack(AUDIO_FREAK_TRACK); }
+    else if (want == 1) { dyVolume(AUDIO_VOLUME);       dyPlayTrack(AUDIO_IDLE_TRACK); }
+    // want == 0 (extinguished): leave it stopped
 }
 #endif
 
@@ -1196,6 +1201,9 @@ static void knifeCheck() {
         armed = false;
         logMsg("KNIFE THROWN — it's alive!");
         startFreakout(FREAKOUT_DEFAULT_S);
+#ifdef AUDIO_ENABLED
+        audioUpdate();   // fire the frantic clip NOW, before the network fan-out
+#endif
         // Fan out — board 2 gets freakout + Try-Me in ONE call (?tryme=1) so the
         // prop fires a round-trip sooner; other boards just freak out. The knife
         // is the only trigger that fires the animatronic.
@@ -2203,6 +2211,16 @@ void setup() {
 #ifdef FLOOD_STRIP_ENABLED
     server.on("/floodget", handleFloodGet);
     server.on("/floodset", handleFloodSet);
+#endif
+#ifdef AUDIO_ENABLED
+    // TEMP diagnostic: /audiotest?t=N stops, then plays physical track N, so we
+    // can map which index is which file. /audiostop stops playback.
+    server.on("/audiotest", []() {
+        int t = server.hasArg("t") ? server.arg("t").toInt() : 1;
+        dyStop(); delay(30); dyPlayTrack(t);
+        server.send(200, "text/plain", "playing track " + String(t) + "\n");
+    });
+    server.on("/audiostop", []() { dyStop(); server.send(200, "text/plain", "stopped\n"); });
 #endif
 #ifdef SHELLY_ENABLED
     // /edison?b=NN pins the bulb to a brightness for testing; /edison?b=-1
