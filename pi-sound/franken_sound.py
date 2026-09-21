@@ -22,7 +22,9 @@ import time
 import urllib.request
 
 # --- config -----------------------------------------------------------------
-STATUS_URL = "http://192.168.68.125/status"   # board 1 (the meters/knife board)
+STATUS_URL = "http://192.168.71.203/status"   # board 3 (lightning) — fastest/most
+                                              # reliable /status; freakout fans out
+                                              # to every board, so any reflects it
 SND_DIR = os.path.expanduser("~/franken")
 IDLE_FILE = os.path.join(SND_DIR, "idle.mp3")       # ambient mad-scientist buzz
 FREAK_FILE = os.path.join(SND_DIR, "freakout.wav")  # frantic clip
@@ -70,7 +72,7 @@ def play(path, vol):
 
 def get_mode():
     try:
-        with urllib.request.urlopen(STATUS_URL, timeout=1) as r:
+        with urllib.request.urlopen(STATUS_URL, timeout=0.6) as r:
             return json.load(r).get("mode")
     except Exception:
         return None
