@@ -24,7 +24,7 @@ import urllib.request
 # --- config -----------------------------------------------------------------
 STATUS_URL = "http://192.168.68.125/status"   # board 1 (the meters/knife board)
 SND_DIR = os.path.expanduser("~/franken")
-IDLE_FILE = os.path.join(SND_DIR, "idle.wav")       # ambient mad-scientist buzz
+IDLE_FILE = os.path.join(SND_DIR, "idle.mp3")       # ambient mad-scientist buzz
 FREAK_FILE = os.path.join(SND_DIR, "freakout.wav")  # frantic clip
 IDLE_VOL = 70      # 0-100
 FREAK_VOL = 100
