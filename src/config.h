@@ -198,7 +198,10 @@ static const MeterProfile METERS[METER_COUNT] = {
 // loops; freakout: a frantic clip. ESP TX (D17) -> module data-in (RX), common
 // ground, module on 5V with a speaker on SPK+/-. Put the two MP3s on the SD as
 // 00001.mp3 (idle loop) and 00002.mp3 (freakout). Set the module to UART mode.
-#define AUDIO_ENABLED
+// RETIRED 2026-09-21: audio is now handled by a WiFi-only Raspberry Pi (see
+// pi-sound/), which avoids the DY amp's interference on the floods/ropes.
+// Re-enable this only if you go back to the on-board DY-SV5W module.
+// #define AUDIO_ENABLED
 #define AUDIO_RX_PIN 16          // module TX -> ESP (optional, for status; unused)
 #define AUDIO_TX_PIN 21          // ESP TX -> module data-in/RX (the wire that matters)
 #define AUDIO_VOLUME 22          // idle volume (0-30)
