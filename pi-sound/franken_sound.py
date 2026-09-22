@@ -31,9 +31,9 @@ UDP_PORT = 4210                               # board 1 pushes "freak"/"idle" he
 SND_DIR = os.path.expanduser("~/franken")
 IDLE_FILE = os.path.join(SND_DIR, "idle.mp3")       # ambient bed (loops forever)
 FREAK_FILE = os.path.join(SND_DIR, "freakout.wav")  # frantic clip (over the bed)
-BED_VOL = 100
-FX_VOL = 100
-DUCK_VOL = 100      # bed volume while a freakout plays (lower to duck it)
+BED_VOL = 80        # idle ambient bed
+FX_VOL = 100        # freakout = full
+DUCK_VOL = 80       # bed volume while a freakout plays (lower to duck it)
 POLL_S = 0.3
 PUSH_HOLD_S = 3.0   # after a push, ignore poll readings this long
 BED_SOCK = "/tmp/frank_bed.sock"
