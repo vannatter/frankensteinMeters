@@ -185,6 +185,13 @@ static const MeterProfile METERS[METER_COUNT] = {
 // strapping pin, so it's safe even if the knife is closed at power-on.
 #define KNIFE_PIN 18
 
+// Raspberry Pi sound box (pi-sound/). Board 1 fires a fire-and-forget UDP
+// "freak"/"idle" packet here the instant a freakout starts/ends, so the Pi
+// switches audio instantly (its /status poll is only a fallback). Reserve the
+// Pi at this IP in the Deco so the target never moves.
+#define PI_AUDIO_IP "192.168.68.128"
+#define PI_AUDIO_PORT 4210
+
 // WS2811 RGB pixel flood light (DC 12-24V, its OWN external supply). Only DATA
 // (D19, via a ~330Ω series resistor) and a common ground go to the board.
 // Subtle green at idle, white lightning strobe on freakout. FLOOD_LEDS can be

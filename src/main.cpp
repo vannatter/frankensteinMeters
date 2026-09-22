@@ -26,6 +26,7 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 
 #include "config.h"
 #include "secrets.h"
@@ -556,11 +557,26 @@ static void pulseTryme() {
 #endif
 }
 
+#ifdef PI_AUDIO_IP
+static WiFiUDP udpPi;
+// Fire-and-forget UDP to the Pi sound box — instant, non-blocking, so it goes
+// out even on a laggy network (the Pi's /status poll is the backstop).
+static void notifyPi(const char* msg) {
+    if (WiFi.status() != WL_CONNECTED) return;
+    udpPi.beginPacket(PI_AUDIO_IP, PI_AUDIO_PORT);
+    udpPi.write((const uint8_t*)msg, strlen(msg));
+    udpPi.endPacket();
+}
+#else
+static inline void notifyPi(const char*) {}   // no-op on boards without the Pi
+#endif
+
 static bool freakingOut() {
     if (freakoutUntil == 0) return false;
     if (freakoutUntil != UINT32_MAX && (int32_t)(millis() - freakoutUntil) >= 0) {
         freakoutUntil = 0;
         logMsg("freakout over, back to normal flicker");
+        notifyPi("idle");     // tell the Pi to drop back to the ambient bed
         return false;
     }
     return true;
@@ -579,6 +595,7 @@ static void startFreakout(long seconds) {
     freakoutUntil = seconds <= 0 ? UINT32_MAX : millis() + (uint32_t)seconds * 1000;
     logMsg(seconds <= 0 ? String("FREAKOUT! (until calm)")
                         : "FREAKOUT! (" + String(seconds) + "s)");
+    notifyPi("freak");     // instant push to the Pi sound box
 #ifdef TRYME_ON_FREAKOUT
     pulseTryme();          // auto-fire the animatronic on freakout (opt-in)
 #endif
@@ -1482,6 +1499,7 @@ static void handleCalm() {
     allOn = false;
     identifyIdx = -1;
     logMsg("calmed by request");
+    notifyPi("idle");     // Pi sound box back to the ambient bed
     forwardToPeers("/calm");
     server.send(200, "application/json", "{\"mode\":\"flicker\"}\n");
 }
