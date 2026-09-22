@@ -24,6 +24,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # --- config -----------------------------------------------------------------
 STATUS_URL = "http://192.168.71.203/status"   # board 3 (fast /status); poll fallback
@@ -36,6 +37,7 @@ FX_VOL = 100        # freakout = full
 DUCK_VOL = 80       # bed volume while a freakout plays (lower to duck it)
 POLL_S = 0.3
 PUSH_HOLD_S = 3.0   # after a push, ignore poll readings this long
+CTL_PORT = 8080     # dashboard hits http://<pi>:8080/pause /resume /toggle /state
 BED_SOCK = "/tmp/frank_bed.sock"
 FX_SOCK = "/tmp/frank_fx.sock"
 # ----------------------------------------------------------------------------
@@ -43,6 +45,7 @@ FX_SOCK = "/tmp/frank_fx.sock"
 _lock = threading.Lock()
 _freaking = False
 _last_push = 0.0
+_paused = False
 
 
 def start_mpv(sock):
@@ -113,6 +116,41 @@ def udp_listener():
             set_freak(msg == "freak")
 
 
+def set_pause(p):
+    """Mute/unmute both mpv instances (mute persists across track switches)."""
+    global _paused
+    _paused = p
+    mpv_cmd(BED_SOCK, "set_property", "mute", p)
+    mpv_cmd(FX_SOCK, "set_property", "mute", p)
+
+
+class CtlHandler(BaseHTTPRequestHandler):
+    """Dashboard control: GET /pause /resume /toggle /state -> {"paused":bool}."""
+    def _reply(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(('{"paused":%s}\n' % ("true" if _paused else "false")).encode())
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path == "/pause":
+            set_pause(True)
+        elif path == "/resume":
+            set_pause(False)
+        elif path == "/toggle":
+            set_pause(not _paused)
+        self._reply()
+
+    def log_message(self, *a):
+        pass
+
+
+def ctl_server():
+    HTTPServer(("0.0.0.0", CTL_PORT), CtlHandler).serve_forever()
+
+
 def get_mode():
     try:
         with urllib.request.urlopen(STATUS_URL, timeout=3) as r:
@@ -127,6 +165,7 @@ def main():
     time.sleep(0.5)
     bed_start()
     threading.Thread(target=udp_listener, daemon=True).start()
+    threading.Thread(target=ctl_server, daemon=True).start()
     while True:                       # poll fallback (won't override a recent push)
         mode = get_mode()
         if mode is not None and (time.time() - _last_push) > PUSH_HOLD_S:

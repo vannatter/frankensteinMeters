@@ -1704,6 +1704,9 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <input type="color" id="ffc" onchange="floodSave()" style="width:2.6rem;height:1.9rem;background:none;border:0;padding:0">
 <select id="ffp" onchange="floodSave()"><option value="0">steady</option><option value="1">breathe</option><option value="2">flicker</option><option value="3">strobe</option><option value="4">off</option></select></div></div>
 <div class="orn">&#10087;</div>
+<div class="card"><label>The Voice</label>
+<div style="margin-top:.45rem"><button id="audiobtn" onclick="audioToggle()" style="width:100%;padding:.5rem">&#9208; Pause Audio</button></div></div>
+<div class="orn">&#10087;</div>
 <div class="card"><label id="instlabel">The Instruments</label><div id="meters"></div></div>
 <div class="orn mobile">&#10087;</div>
 </div><div class="colR">
@@ -1738,7 +1741,13 @@ async function loadHerd(){
    t.appendChild(op);});
  }catch(e){}
  floodLoad();
+ audioState();
  refresh();}
+// The Voice: pause/resume the Raspberry Pi sound box over its HTTP control port.
+const PI_AUDIO='http://192.168.68.128:8080';
+function audioLabel(p){const b=document.getElementById('audiobtn');if(b)b.innerHTML=p?'&#9654; Resume Audio':'&#9208; Pause Audio';}
+async function audioToggle(){try{const s=await (await fetch(PI_AUDIO+'/toggle')).json();audioLabel(s.paused);}catch(e){}}
+async function audioState(){try{const s=await (await fetch(PI_AUDIO+'/state')).json();audioLabel(s.paused);}catch(e){}}
 // The Arc-Flood lives on board 1; find its full url from the herd roster and
 // load/save its calm+freakout color & pattern to /floodget /floodset.
 function floodURL(){const b=HERD.find(x=>x[0]==1);return b?b[2]:'';}
