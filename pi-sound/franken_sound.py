@@ -83,7 +83,7 @@ def fx_stop():
 
 def get_mode():
     try:
-        with urllib.request.urlopen(STATUS_URL, timeout=0.6) as r:
+        with urllib.request.urlopen(STATUS_URL, timeout=3) as r:
             return json.load(r).get("mode")
     except Exception:
         return None
