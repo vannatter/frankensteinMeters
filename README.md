@@ -9,6 +9,11 @@ lightning bolts race up the towers into the creature's head, and he jerks awake.
 
 Built with PlatformIO + Arduino on generic ESP32 DevKits.
 
+> **Status: 2026 Release Candidate** (tag `2026-rc1`) — feature-complete for the
+> 2026 Halloween season: 3-board herd, knife throw-switch, attract mode, desk
+> energy core, WS2811 flood, and a WiFi Raspberry Pi sound box (layered ambient
+> + freakout audio).
+
 ---
 
 ## The lab (three boards)
