@@ -652,19 +652,20 @@ static void edisonUpdate() {
         float ph = (now % 8000) / 8000.0f;
         b = (int)((ph < 0.5f ? ph * 2 : 2 - ph * 2) * 100);
     } else if (freak) {
-        // Throb blinding <-> near-black; occasional double-bright for chaos.
-        freakHi = !freakHi;
-        b = freakHi ? (int)frand(95, 100)
-                    : (frand(0, 1) < 0.3f ? (int)frand(60, 80) : (int)frand(1, 3));
+        // Pegged HIGH with a violent throb — mostly slammed to full 100, only
+        // occasionally dropping (a few near-black flickers for chaos).
+        freakHi = frand(0, 1) < 0.65f;
+        b = freakHi ? 100
+                    : (frand(0, 1) < 0.35f ? (int)frand(1, 4) : (int)frand(50, 80));
     } else if (comaMode) {
-        b = (int)frand(2, 7);  // barely-there ember
+        b = (int)frand(1, 5);  // barely-there ember
     } else {
-        // Brown-out hover: stays very dim. Mostly single digits/low teens,
-        // dips near-dark, only rare gentle lifts to the low 20s.
+        // Brown-out hover: even dimmer than before. Mostly low single digits,
+        // dips near-dark, only rare faint lifts.
         float r = frand(0, 1);
-        if (r < 0.22f)      b = (int)frand(1, 4);    // deep dip
-        else if (r > 0.92f) b = (int)frand(16, 24);  // rare gentle lift
-        else                b = (int)frand(4, 13);   // dim hover
+        if (r < 0.25f)      b = (int)frand(1, 3);    // deep dip
+        else if (r > 0.94f) b = (int)frand(8, 14);   // rare, faint lift
+        else                b = (int)frand(2, 7);    // very dim hover
     }
     b = (int)constrain((float)b, 1.0f, 100.0f);
     if (WiFi.status() == WL_CONNECTED && (first || wantOn != lastOn || b != lastB)) {
