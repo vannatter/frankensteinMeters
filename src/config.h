@@ -299,7 +299,7 @@ static const MeterProfile METERS[METER_COUNT] = {
 // its own jittered timer; whichever fires first fans out to the herd (which
 // resets everyone), so they stay coordinated and it survives any board being
 // offline. Any trigger — manual or auto — restarts the clock.
-#define AUTO_FREAKOUT_MS 300000    // 5 minutes
+#define AUTO_FREAKOUT_MS 120000    // 2 minutes (fires 2:00-2:45 with the jitter)
 #define AUTO_FREAKOUT_JITTER_MS 45000
 
 // ---------------------------------------------------------------------------

@@ -1195,7 +1195,10 @@ static void maybeAutoFreak() {
     if (WiFi.status() == WL_CONNECTED)
         for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
             if (ALL_BOARDS[i].id == BOARD_ID) continue;
-            sendToBoard(ALL_BOARDS[i].ip, "/freakout");
+            // Attract mode fires the animatronic too (board 2 gets ?tryme=1),
+            // same as the knife.
+            sendToBoard(ALL_BOARDS[i].ip,
+                        ALL_BOARDS[i].id == 2 ? "/freakout?tryme=1" : "/freakout");
         }
 }
 #endif
