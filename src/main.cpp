@@ -1711,6 +1711,12 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <div class="card"><label>The Voice</label>
 <div style="margin-top:.45rem"><button id="audiobtn" onclick="audioToggle()" style="width:100%;padding:.5rem">&#9208; Pause Audio</button></div></div>
 <div class="orn">&#10087;</div>
+<div class="card"><label>The Creatures</label>
+<div style="display:flex;gap:.4rem;margin-top:.45rem">
+<button onclick="fireProp('both')" style="flex:2;padding:.5rem">&#9889; Fire Both</button>
+<button onclick="fireProp('1')" style="flex:1;padding:.5rem">1</button>
+<button onclick="fireProp('2')" style="flex:1;padding:.5rem">2</button></div></div>
+<div class="orn">&#10087;</div>
 <div class="card"><label id="instlabel">The Instruments</label><div id="meters"></div></div>
 <div class="orn mobile">&#10087;</div>
 </div><div class="colR">
@@ -1751,6 +1757,9 @@ async function loadHerd(){
 const PI_AUDIO='http://192.168.68.128:8080';
 function audioLabel(p){const b=document.getElementById('audiobtn');if(b)b.innerHTML=p?'&#9654; Resume Audio':'&#9208; Pause Audio';}
 async function audioToggle(){try{const s=await (await fetch(PI_AUDIO+'/toggle')).json();audioLabel(s.paused);}catch(e){}}
+// The Creatures: manually fire the standalone animatronic timer ESP.
+const FIRE_BOARD='http://192.168.71.204';
+function fireProp(which){fetch(FIRE_BOARD+'/fire?which='+which).catch(()=>{});}
 async function audioState(){try{const s=await (await fetch(PI_AUDIO+'/state')).json();audioLabel(s.paused);}catch(e){}}
 // The Arc-Flood lives on board 1; find its full url from the herd roster and
 // load/save its calm+freakout color & pattern to /floodget /floodset.
