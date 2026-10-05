@@ -1582,6 +1582,9 @@ label{display:block;text-align:center;font-variant:small-caps;letter-spacing:.28
 color:var(--dim);font-size:.85rem;margin-bottom:.55rem}
 select{width:100%;font-family:inherit;font-size:1rem;padding:.55rem .7rem;border-radius:2px;
 border:1px solid var(--edge);background:#14100b;color:var(--ink);cursor:pointer}
+.srow{display:flex;align-items:center;gap:.5rem;margin-top:.45rem}
+.srow span{flex:1}
+.srow select{width:9rem;max-width:48vw}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:.65rem;margin-top:.85rem}
 button{font-family:inherit;font-variant:small-caps;font-size:1.1rem;letter-spacing:.08em;
 display:flex;flex-direction:column;align-items:center;gap:.1rem;
@@ -1715,7 +1718,17 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <div style="display:flex;gap:.4rem;margin-top:.45rem">
 <button onclick="fireProp('both')" style="flex:2;padding:.5rem">&#9889; Fire Both</button>
 <button onclick="fireProp('1')" style="flex:1;padding:.5rem">1</button>
-<button onclick="fireProp('2')" style="flex:1;padding:.5rem">2</button></div></div>
+<button onclick="fireProp('2')" style="flex:1;padding:.5rem">2</button></div>
+<div style="display:flex;align-items:center;gap:.5rem;margin-top:.6rem">
+<span class="mname" style="flex:1">&#9211; Auto-fire schedule</span>
+<button id="armbtn" onclick="armToggle()" style="padding:.4rem .8rem">&hellip;</button></div>
+<div id="schedbody">
+<div class="srow"><span>Start</span><select id="sStart" onchange="schedSet()"></select></div>
+<div class="srow"><span>Slow down at</span><select id="sLate" onchange="schedSet()"></select></div>
+<div class="srow"><span>Stop</span><select id="sStop" onchange="schedSet()"></select></div>
+<div class="srow"><span>Evening: every</span><select id="sEv" onchange="schedSet()"></select></div>
+<div class="srow"><span>Late: every</span><select id="sLat" onchange="schedSet()"></select></div>
+</div></div>
 <div class="orn">&#10087;</div>
 <div class="card"><label id="instlabel">The Instruments</label><div id="meters"></div></div>
 <div class="orn mobile">&#10087;</div>
@@ -1752,14 +1765,36 @@ async function loadHerd(){
  }catch(e){}
  floodLoad();
  audioState();
+ schedInit();
  refresh();}
 // The Voice: pause/resume the Raspberry Pi sound box over its HTTP control port.
 const PI_AUDIO='http://192.168.68.128:8080';
 function audioLabel(p){const b=document.getElementById('audiobtn');if(b)b.innerHTML=p?'&#9654; Resume Audio':'&#9208; Pause Audio';}
 async function audioToggle(){try{const s=await (await fetch(PI_AUDIO+'/toggle')).json();audioLabel(s.paused);}catch(e){}}
-// The Creatures: manually fire the standalone animatronic timer ESP.
+// The Creatures: fire + schedule the standalone animatronic timer ESP.
 const FIRE_BOARD='http://192.168.71.204';
 function fireProp(which){fetch(FIRE_BOARD+'/fire?which='+which).catch(()=>{});}
+let schedArmed=true;
+function hLabel(h){h=(h+24)%24;const ap=h<12?'AM':'PM';let x=h%12;if(!x)x=12;
+ return x+' '+ap+(h===0?' (mid)':h===12?' (noon)':'');}
+function fillSel(id,vals,lab){const s=document.getElementById(id);if(s)
+ s.innerHTML=vals.map(v=>'<option value="'+v+'">'+lab(v)+'</option>').join('');}
+function selV(id){return document.getElementById(id).value;}
+function setSelV(id,v){const s=document.getElementById(id);if(s)s.value=String(v);}
+function armLabel(){const b=document.getElementById('armbtn');if(b)b.innerHTML=schedArmed?'&#9989; Armed':'&#9211; Off';
+ const sb=document.getElementById('schedbody');if(sb)sb.style.opacity=schedArmed?'1':'.45';}
+function schedInit(){const hrs=[17,18,19,20,21,22,23,0,1,2,3];
+ fillSel('sStart',hrs,hLabel);fillSel('sLate',hrs,hLabel);fillSel('sStop',hrs,hLabel);
+ const mins=[1,2,3,5,10,15];fillSel('sEv',mins,m=>m+' min');fillSel('sLat',mins,m=>m+' min');
+ schedLoad();}
+async function schedLoad(){try{const s=await (await fetch(FIRE_BOARD+'/schedule')).json();
+ schedArmed=!!s.armed;armLabel();setSelV('sStart',s.start);setSelV('sLate',s.late);
+ setSelV('sStop',s.stop);setSelV('sEv',s.eveningMin);setSelV('sLat',s.lateMin);}catch(e){}}
+function schedPush(){const q='armed='+(schedArmed?1:0)+'&start='+selV('sStart')+'&late='+selV('sLate')
+ +'&stop='+selV('sStop')+'&evmin='+selV('sEv')+'&latmin='+selV('sLat');
+ fetch(FIRE_BOARD+'/schedule?'+q).catch(()=>{});}
+function schedSet(){schedPush();}
+function armToggle(){schedArmed=!schedArmed;armLabel();schedPush();}
 async function audioState(){try{const s=await (await fetch(PI_AUDIO+'/state')).json();audioLabel(s.paused);}catch(e){}}
 // The Arc-Flood lives on board 1; find its full url from the herd roster and
 // load/save its calm+freakout color & pattern to /floodget /floodset.
