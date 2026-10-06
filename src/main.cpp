@@ -21,6 +21,7 @@
 // c = calm.
 
 #include <Arduino.h>
+#include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
@@ -31,6 +32,10 @@
 
 #include "config.h"
 #include "secrets.h"
+
+#ifndef OTA_PASSWORD
+#define OTA_PASSWORD "frankenlab"   // wireless-flash password (override in secrets.h)
+#endif
 
 #if defined(STRIP_ENABLED) || defined(CORE_STRIP_ENABLED) || defined(FLOOD_STRIP_ENABLED)
 #define FASTLED_INTERNAL  // silence FastLED's version-banner pragma
@@ -2287,6 +2292,11 @@ static void connectWiFi() {
         logMsg("connected: http://" + WiFi.localIP().toString() +
                "/ (or http://" WIFI_HOSTNAME ".local/)");
         if (MDNS.begin(WIFI_HOSTNAME)) MDNS.addService("http", "tcp", 80);
+        // Wireless flashing: pio run -e boardN_ota -t upload  (see platformio.ini)
+        ArduinoOTA.setHostname(WIFI_HOSTNAME);
+        ArduinoOTA.setPassword(OTA_PASSWORD);
+        ArduinoOTA.begin();
+        logMsg("OTA ready (wireless flashing enabled)");
     } else {
         Serial.println();
         logMsg("WiFi failed — flicker runs anyway; will keep retrying");
@@ -2430,6 +2440,7 @@ void setup() {
     xTaskCreatePinnedToCore([](void*) {
         for (;;) {
             server.handleClient();
+            ArduinoOTA.handle();   // wireless flashing, same task as HTTP
 #ifdef SHELLY_ENABLED
             edisonUpdate();
 #endif
@@ -2444,7 +2455,7 @@ void setup() {
 #endif
             vTaskDelay(1);
         }
-    }, "http", 12288, nullptr, 1, nullptr, 0);
+    }, "http", 16384, nullptr, 1, nullptr, 0);   // 16KB: headroom for OTA flash writes
 }
 
 void loop() {
