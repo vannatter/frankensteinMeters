@@ -139,13 +139,18 @@ Once a board already runs OTA-capable firmware (one USB flash to install it),
 reflash it over WiFi — no cable, no reaching the deployed boards:
 
 ```
-pio run -e board1_ota -t upload   # or board2_ota / board3_ota
+./ota.sh board1        # or board2 / board3
 ```
 
-Targets are by **IP** (`.68.125` / `.71.202` / `.71.203`) because mDNS `.local`
-doesn't resolve on this Deco mesh. The password is `OTA_PASSWORD` (a `#define`,
-default `frankenlab`; override in `src/secrets.h` and match `--auth=` in
-`platformio.ini`). `flash.sh` remains the USB path.
+`ota.sh` builds with the normal env and uploads with `espota.py` over WiFi,
+targeting each board by **IP** (`.68.125` / `.71.202` / `.71.203`; mDNS `.local`
+doesn't resolve on this Deco mesh). The password is `OTA_PASSWORD` (a `#define`,
+default `frankenlab`; override in `src/secrets.h`, or export `OTA_PASSWORD`
+before running). `flash.sh` remains the USB path.
+
+> Why a script and not a PlatformIO `espota` env: the espressif32 platform
+> compiles ~450 KB larger when `upload_protocol = espota` is set, overflowing the
+> app partition. `ota.sh` builds the normal (smaller) binary and uploads that.
 
 WiFi credentials live in `src/secrets.h` (gitignored). All per-board hardware
 (pins, meter map, light channels, Edison, lightning) is configured in
