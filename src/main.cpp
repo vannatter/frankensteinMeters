@@ -27,6 +27,7 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <time.h>
 
 #include "config.h"
 #include "secrets.h"
@@ -557,6 +558,33 @@ static void pulseTryme() {
 #endif
 }
 
+// Dashboard toggle (saved in flash): should a freakout also fire the animatronic
+// Try-Me? Default on. The knife always fires it regardless of this + the window.
+static bool trymeOnFreak = true;
+static const char* TZ_STR = "EST5EDT,M3.2.0,M11.1.0";   // DST-aware (EDT on Halloween)
+
+// Local hour 0-23, or -1 if NTP hasn't synced yet.
+static int localHour() {
+    struct tm t;
+    if (!getLocalTime(&t, 0) || t.tm_year < (2020 - 1900)) return -1;
+    return t.tm_hour;
+}
+// Auto Try-Me on freakout is only allowed in the evening: 6pm up to (not incl.)
+// 10pm. Fail-closed if the time is unknown, so it never fires in the dead of night.
+static bool trymeWindowOpen() {
+    int h = localHour();
+    return h >= 18 && h < 22;
+}
+// Fire the Try-Me on a freakout *if* enabled and inside the evening window.
+// (The knife uses pulseTryme() directly and ignores both gates.)
+static void autoFireTryme() {
+#ifdef TRYME_PIN
+    if (!trymeOnFreak)      { logMsg("try-me (auto): toggle off");            return; }
+    if (!trymeWindowOpen()) { logMsg("try-me (auto): outside 6-10pm window"); return; }
+    pulseTryme();
+#endif
+}
+
 #ifdef PI_AUDIO_IP
 static WiFiUDP udpPi;
 // Fire-and-forget UDP to the Pi sound box — instant, non-blocking, so it goes
@@ -596,9 +624,8 @@ static void startFreakout(long seconds) {
     logMsg(seconds <= 0 ? String("FREAKOUT! (until calm)")
                         : "FREAKOUT! (" + String(seconds) + "s)");
     notifyPi("freak");     // instant push to the Pi sound box
-#ifdef TRYME_ON_FREAKOUT
-    pulseTryme();          // auto-fire the animatronic on freakout (opt-in)
-#endif
+    // NOTE: the Try-Me is fired by the caller (knife = always; attract/auto =
+    // autoFireTryme(), gated by the dashboard toggle + 6-10pm window), not here.
 #ifdef AUTO_FREAKOUT_MS
     scheduleAutoFreak();   // any trigger — manual, forwarded, or auto — resets it
 #endif
@@ -1193,13 +1220,14 @@ static void maybeAutoFreak() {
     if ((int32_t)(millis() - autoFreakTarget) < 0) return;
     logMsg("attract mode: auto-galvanize");
     startFreakout(FREAKOUT_DEFAULT_S);        // reschedules autoFreakTarget
+    autoFireTryme();                          // this board's own prop (no-op unless board 2)
     if (WiFi.status() == WL_CONNECTED)
         for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
             if (ALL_BOARDS[i].id == BOARD_ID) continue;
-            // Attract mode fires the animatronic too (board 2 gets ?tryme=1),
-            // same as the knife.
+            // Attract also fires the animatronic, but gated: board 2 gets
+            // ?tryme=auto (honors the dashboard toggle + 6-10pm window).
             sendToBoard(ALL_BOARDS[i].ip,
-                        ALL_BOARDS[i].id == 2 ? "/freakout?tryme=1" : "/freakout");
+                        ALL_BOARDS[i].id == 2 ? "/freakout?tryme=auto" : "/freakout");
         }
 }
 #endif
@@ -1227,7 +1255,8 @@ static void knifeCheck() {
 #endif
         // Fan out — board 2 gets freakout + Try-Me in ONE call (?tryme=1) so the
         // prop fires a round-trip sooner; other boards just freak out. The knife
-        // is the only trigger that fires the animatronic.
+        // uses ?tryme=1 = force: it ALWAYS fires the prop, ignoring the dashboard
+        // toggle and the 6-10pm window (attract uses ?tryme=auto, which honors them).
         if (WiFi.status() == WL_CONNECTED)
             for (unsigned i = 0; i < ALL_BOARDS_N; i++) {
                 if (ALL_BOARDS[i].id == BOARD_ID) continue;
@@ -1489,7 +1518,12 @@ static void handleFreakout() {
     allOff = false;
     allOn = false;
     startFreakout(seconds);
-    if (server.hasArg("tryme")) pulseTryme();   // knife sends this to fire the prop
+    if (server.hasArg("tryme")) {
+        // tryme=auto -> attract mode: honor the toggle + 6-10pm window.
+        // tryme=1 (or anything else) -> knife/manual: always fire.
+        if (server.arg("tryme") == "auto") autoFireTryme();
+        else                               pulseTryme();
+    }
     forwardToPeers(path.c_str());
     server.send(200, "application/json", "{\"mode\":\"freakout\"}\n");
 }
@@ -1506,6 +1540,21 @@ static void handleCalm() {
     notifyPi("idle");     // Pi sound box back to the ambient bed
     forwardToPeers("/calm");
     server.send(200, "application/json", "{\"mode\":\"flicker\"}\n");
+}
+
+// Dashboard toggle for "a freakout also fires board 2's Try-Me" (saved in flash).
+static void handleTrymeGet() {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"on\":%d,\"hour\":%d}\n", trymeOnFreak ? 1 : 0, localHour());
+    server.send(200, "application/json", buf);
+}
+static void handleTrymeSet() {
+    if (server.hasArg("on")) {
+        trymeOnFreak = server.arg("on") == "1";
+        prefs.putUChar("tmAuto", trymeOnFreak ? 1 : 0);
+        logMsg(trymeOnFreak ? "try-me on freakout: ENABLED" : "try-me on freakout: disabled");
+    }
+    handleTrymeGet();
 }
 
 static void handleOff() {
@@ -1728,7 +1777,10 @@ footer{text-align:center;color:#5d4c30;font-style:italic;font-size:.8rem;margin:
 <div class="srow"><span>Stop</span><select id="sStop" onchange="schedSet()"></select></div>
 <div class="srow"><span>Evening: every</span><select id="sEv" onchange="schedSet()"></select></div>
 <div class="srow"><span>Late: every</span><select id="sLat" onchange="schedSet()"></select></div>
-</div></div>
+</div>
+<div style="display:flex;align-items:center;gap:.5rem;margin-top:.65rem;border-top:1px solid var(--edge);padding-top:.55rem">
+<span class="mname" style="flex:1">&#128128; Lab prop: freakout fires it <small style="opacity:.7">(6&ndash;10pm; knife always)</small></span>
+<button id="lpbtn" onclick="labPropToggle()" style="padding:.4rem .8rem">&hellip;</button></div></div>
 <div class="orn">&#10087;</div>
 <div class="card"><label id="instlabel">The Instruments</label><div id="meters"></div></div>
 <div class="orn mobile">&#10087;</div>
@@ -1766,6 +1818,7 @@ async function loadHerd(){
  floodLoad();
  audioState();
  schedInit();
+ labPropLoad();
  refresh();}
 // The Voice: pause/resume the Raspberry Pi sound box over its HTTP control port.
 const PI_AUDIO='http://192.168.68.128:8080';
@@ -1795,6 +1848,14 @@ function schedPush(){const q='armed='+(schedArmed?1:0)+'&start='+selV('sStart')+
  fetch(FIRE_BOARD+'/schedule?'+q).catch(()=>{});}
 function schedSet(){schedPush();}
 function armToggle(){schedArmed=!schedArmed;armLabel();schedPush();}
+// Lab prop (board 2): does a freakout also fire its Try-Me? Persisted on board 2.
+let labPropOn=true;
+function board2URL(){const b=HERD.find(x=>x[0]==2);return b?b[2]:'';}
+function labPropLabel(){const b=document.getElementById('lpbtn');if(b)b.innerHTML=labPropOn?'&#9989; On':'&#9211; Off';}
+async function labPropLoad(){const u=board2URL();if(!u)return;
+ try{const s=await (await fetch(u+'/trymeget')).json();labPropOn=!!s.on;labPropLabel();}catch(e){}}
+function labPropToggle(){const u=board2URL();if(!u)return;labPropOn=!labPropOn;labPropLabel();
+ fetch(u+'/trymeset?on='+(labPropOn?1:0)).catch(()=>{});}
 async function audioState(){try{const s=await (await fetch(PI_AUDIO+'/state')).json();audioLabel(s.paused);}catch(e){}}
 // The Arc-Flood lives on board 1; find its full url from the herd roster and
 // load/save its calm+freakout color & pattern to /floodget /floodset.
@@ -2242,6 +2303,7 @@ void setup() {
     Serial2.begin(9600, SERIAL_8N1, AUDIO_RX_PIN, AUDIO_TX_PIN);  // DY-SV5W MP3 module
 #endif
     prefs.begin("franken");
+    trymeOnFreak = prefs.getUChar("tmAuto", 1) != 0;   // freakout fires Try-Me (default on)
 #ifdef FLOOD_STRIP_ENABLED
     {   uint32_t c = prefs.getUInt("fcClr", 0x00B400);
         floodCalmR = c >> 16; floodCalmG = c >> 8; floodCalmB = c;
@@ -2273,9 +2335,12 @@ void setup() {
     Serial.printf("Frankenstein Meters: flickering %d meter(s)\n", METER_COUNT);
 
     connectWiFi();
+    configTzTime(TZ_STR, "pool.ntp.org", "time.nist.gov");   // for the 6-10pm Try-Me gate
     // Lets the dashboard on one board read and set another board's channels.
     server.enableCORS(true);
     server.on("/", handlePanel);
+    server.on("/trymeget", handleTrymeGet);
+    server.on("/trymeset", handleTrymeSet);
     server.on("/set", handleSet);
     server.on("/pattern", handlePattern);
     server.on("/mpattern", handleMPattern);
