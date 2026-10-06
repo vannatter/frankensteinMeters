@@ -9,10 +9,12 @@ lightning bolts race up the towers into the creature's head, and he jerks awake.
 
 Built with PlatformIO + Arduino on generic ESP32 DevKits.
 
-> **Status: 2026 Release Candidate** (tag `2026-rc1`) — feature-complete for the
-> 2026 Halloween season: 3-board herd, knife throw-switch, attract mode, desk
-> energy core, WS2811 flood, and a WiFi Raspberry Pi sound box (layered ambient
-> + freakout audio).
+> **Status: 2026 Release Candidate** (tag `2026-rc1`), running live for the 2026
+> Halloween season and refined from a week of real use: 3-board herd, knife
+> throw-switch, attract mode, desk energy core, WS2811 flood, a WiFi Raspberry Pi
+> sound box (layered ambient + freakout audio), **over-the-air flashing**, and
+> dashboard control of a companion board that drives two more animatronics
+> (see the sibling [`esp-fire-try-me`](https://github.com/vannatter/esp-fire-try-me) repo).
 
 ---
 
@@ -46,8 +48,9 @@ Set lab-wide from the dashboard, or per-channel:
 
 - **Flicker** — the resting state. Each instrument idles in character.
 - **Galvanize (freakout)** — the shock. Meters slam and seize, lights strobe,
-  Edison surges bright↔black, lightning fires, the animatronic triggers. Runs
-  20 s (covers the prop's full animation).
+  Edison surges bright↔black, lightning fires, and the animatronic triggers (if
+  the dashboard's Lab-prop toggle is on and it's 6–10pm; the knife always fires
+  it — see Lights below). Runs 20 s (covers the prop's full animation).
 - **Coma** — barely alive: shallow breathing, faint heartbeat, dim ember, and
   on the towers just his temples pulsing a slow faint blue.
 - **Calibrate (sweep)** — meters ramp 0→100→0% slowly for sizing resistors;
@@ -68,7 +71,12 @@ Each of 12 channels picks a pattern: `dark`, `steady`, `doubleblink`,
 Panic strobes them all; coma darkens them. The **Edison bulb** runs on a Shelly
 Dimmer G4 over HTTP — a dim failing-mains brown-out at rest, violent throb on
 panic. The **Try-Me trigger** (GPIO 32 → isolated MOSFET) presses the
-animatronic's button when panic starts.
+animatronic's button. Firing it on a freakout is a **dashboard toggle** (saved
+in flash, default on) that's **gated to 6–10pm** — so the prop runs during show
+hours but goes quiet late, even if the lab keeps freaking out. The **knife
+throw-switch always fires it**, any time, ignoring the toggle and the window.
+(The time gate uses NTP; if the clock can't be reached the auto-fire stays off,
+but the knife still works.)
 
 ### Lightning (board 3)
 Two addressable neon ropes (150 LEDs each), one up each shock tower, fed from a
@@ -98,6 +106,13 @@ A single self-hosted page (served from each board) in an IM Fell gothic theme:
   hardware is doing right now (needle arcs, glowing light dots).
 - **Per-channel control** — name (tap to rename), power toggle, mode/pattern
   dropdown, identify, and visual rhythm/choreography editors.
+- **The Creatures** — manual fire buttons (both / prop 1 / prop 2) and a full
+  schedule editor (arm on/off, start / slow-down / stop hours, evening & late
+  cadence) for the companion [`esp-fire-try-me`](https://github.com/vannatter/esp-fire-try-me)
+  board; settings save on that board. Plus the **Lab prop** toggle (does a
+  freakout also fire board 2's own animatronic, 6–10pm).
+- **The Arc-Flood / The Voice** — flood-light colors & patterns, and pause/resume
+  for the Pi sound box.
 - **Targeting** — act on the whole lab or one board.
 - Responsive; runs from any phone/laptop on the house network.
 
@@ -117,6 +132,20 @@ its original DevKit turned out to be brownout-/WiFi-flaky).
 
 Raw PlatformIO also works: `pio run -e board2 -t upload`.
 Serial monitor: `pio device monitor` (115200).
+
+### Wireless (OTA) flashing
+
+Once a board already runs OTA-capable firmware (one USB flash to install it),
+reflash it over WiFi — no cable, no reaching the deployed boards:
+
+```
+pio run -e board1_ota -t upload   # or board2_ota / board3_ota
+```
+
+Targets are by **IP** (`.68.125` / `.71.202` / `.71.203`) because mDNS `.local`
+doesn't resolve on this Deco mesh. The password is `OTA_PASSWORD` (a `#define`,
+default `frankenlab`; override in `src/secrets.h` and match `--auth=` in
+`platformio.ini`). `flash.sh` remains the USB path.
 
 WiFi credentials live in `src/secrets.h` (gitignored). All per-board hardware
 (pins, meter map, light channels, Edison, lightning) is configured in
